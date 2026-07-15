@@ -763,6 +763,79 @@ class TestQueryParcels:
         )
 
     @pytest.mark.asyncio
+    async def test_limit_clamp_is_surfaced(self, plugin):
+        """A limit above MAX_LIMIT must announce the clamp, not hide it."""
+        calls = install_client(
+            plugin,
+            routes=[
+                (is_count, {"count": 8000}),
+                (is_feature_query, {"features": [feat(**SAMPLE_RECORD)]}),
+            ],
+        )
+        result = await run_tool(
+            plugin, "query_parcels", {"where": "1=1", "limit": 5000}
+        )
+        text = tool_text(result)
+        assert "**LIMIT CLAMPED:**" in text
+        assert "requested limit=5000" in text
+        assert "maximum of 1000" in text
+        assert "offset=" in text
+        feature_calls = [c for c in calls if is_feature_query(*c)]
+        assert int(feature_calls[0][1]["resultRecordCount"]) <= 1000
+
+    @pytest.mark.asyncio
+    async def test_in_range_limit_has_no_clamp_note(self, plugin):
+        install_client(
+            plugin,
+            routes=[
+                (is_count, {"count": 1}),
+                (is_feature_query, {"features": [feat(**SAMPLE_RECORD)]}),
+            ],
+        )
+        result = await run_tool(
+            plugin, "query_parcels", {"where": "1=1", "limit": 1000}
+        )
+        assert "LIMIT CLAMPED" not in tool_text(result)
+
+    @pytest.mark.asyncio
+    async def test_union_inside_string_literal_allowed(self, plugin):
+        """Regression: 'CREDIT UNION DR' parcels must be queryable by
+        address -- UNION inside a quoted literal is data, not SQL."""
+        where = "Parcel_Address LIKE '%UNION%'"
+        calls = install_client(
+            plugin,
+            routes=[
+                (is_count, {"count": 8}),
+                (
+                    is_feature_query,
+                    {
+                        "features": [
+                            feat(
+                                **dict(
+                                    SAMPLE_RECORD,
+                                    Parcel_Address="4301 CREDIT UNION DR",
+                                )
+                            )
+                        ]
+                    },
+                ),
+            ],
+        )
+        result = await run_tool(plugin, "query_parcels", {"where": where})
+        text = tool_text(result)
+        assert "4301 CREDIT UNION DR" in text
+        # The ORIGINAL clause (not a masked copy) is forwarded upstream.
+        feature_calls = [c for c in calls if is_feature_query(*c)]
+        assert where in feature_calls[0][1]["where"]
+
+    @pytest.mark.asyncio
+    async def test_unbalanced_quote_rejected(self, plugin):
+        install_client(plugin)
+        result = await run_tool(plugin, "query_parcels", {"where": "Owner_Name = 'ABC"})
+        assert result.success is False
+        assert "Unbalanced quote" in result.error_message
+
+    @pytest.mark.asyncio
     async def test_injection_where_rejected(self, plugin):
         install_client(plugin)
         result = await run_tool(
@@ -790,6 +863,55 @@ class TestQueryParcels:
             {"where": "1=1", "order_by": "Lot_Size DESC; DROP"},
         )
         assert result.success is False
+
+
+# ── Compact multi-record format ────────────────────────────────────────
+
+
+class TestCompactRecordFormat:
+    @pytest.mark.asyncio
+    async def test_large_result_uses_pipe_table(self, plugin):
+        """Above the threshold, records render as one pipe-delimited
+        table (header + rows) instead of per-record blocks."""
+        n = AnchorageParcelsPlugin.COMPACT_FORMAT_THRESHOLD + 5
+        feats = [feat(**dict(SAMPLE_RECORD, Parcel_ID=f"{i:011d}")) for i in range(n)]
+        install_client(
+            plugin,
+            routes=[
+                (is_count, {"count": n}),
+                (is_feature_query, {"features": feats}),
+            ],
+        )
+        result = await run_tool(plugin, "query_parcels", {"where": "1=1", "limit": 100})
+        text = tool_text(result)
+        assert "Record 1:" not in text
+        # Header row lists the columns in record order.
+        assert "Parcel_ID | GIS_ParcelNum8Formatted | Owner_Name" in text
+        assert f"Returned {n}" in text
+        # Provenance and count conventions are untouched.
+        assert text.startswith("Source: ")
+        assert "TOTAL COUNT" in text
+
+    @pytest.mark.asyncio
+    async def test_small_result_keeps_record_blocks(self, plugin):
+        install_client(
+            plugin,
+            routes=[
+                (is_count, {"count": 2}),
+                (
+                    is_feature_query,
+                    {"features": [feat(**SAMPLE_RECORD), feat(**SAMPLE_RECORD)]},
+                ),
+            ],
+        )
+        result = await run_tool(plugin, "query_parcels", {"where": "1=1", "limit": 100})
+        text = tool_text(result)
+        assert "Record 1:" in text
+        assert "Record 2:" in text
+
+    def test_pipe_in_value_is_escaped(self, plugin):
+        assert plugin._table_cell("A | B") == "A \\| B"
+        assert plugin._table_cell(None) == ""
 
 
 # ── parcel_stats ───────────────────────────────────────────────────────

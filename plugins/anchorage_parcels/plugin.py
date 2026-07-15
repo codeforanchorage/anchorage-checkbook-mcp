@@ -173,6 +173,9 @@ class AnchorageParcelsPlugin(MCPPlugin):
     SERVER_PAGE_SIZE = 2000
     # Hard cap on records in one tool response.
     MAX_LIMIT = 1000
+    # Above this many records, _format_records switches from per-record
+    # blocks to a compact pipe-delimited table.
+    COMPACT_FORMAT_THRESHOLD = 20
 
     SCHEMA_SNAPSHOT_PATH = Path(__file__).parent / "schema" / "propertyinformation.json"
 
@@ -363,6 +366,25 @@ class AnchorageParcelsPlugin(MCPPlugin):
         if not out_fields or not str(out_fields).strip():
             return self._summary_fields
         return OutFieldsValidator.validate(str(out_fields))
+
+    def _clamp_limit(
+        self, args: Dict[str, Any], default: int, maximum: int
+    ) -> Tuple[int, Optional[str]]:
+        """Clamp the limit argument to [1, maximum].
+
+        Returns (limit, notice); the notice is a visible banner when the
+        request exceeded the maximum -- silent clamping would leave the
+        caller with no signal that records were withheld.
+        """
+        requested = int(args.get("limit", default))
+        limit = max(1, min(requested, maximum))
+        note = None
+        if requested > maximum:
+            note = (
+                f"**LIMIT CLAMPED:** requested limit={requested} exceeds "
+                f"the maximum of {maximum}; returning at most {maximum}."
+            )
+        return limit, note
 
     def _check_field_exists(self, field: str, arg_name: str) -> str:
         """Validate a single field-name argument against the live schema."""
@@ -640,10 +662,12 @@ class AnchorageParcelsPlugin(MCPPlugin):
         where: Optional[str] = None,
         out_fields: Optional[str] = None,
         heading: Optional[str] = None,
+        notices: Optional[List[str]] = None,
     ) -> str:
         """List records with provenance header, TOTAL COUNT line, and a
         truncation banner (conventions from anchorage_gis
-        `_format_query_results`)."""
+        `_format_query_results`). Extra caller banners (e.g. the
+        LIMIT CLAMPED notice) go in `notices`, right after TRUNCATED."""
         lines = self._provenance(where=where, out_fields=out_fields, limit=limit)
         truncated = (
             total_count is not None and len(records) > 0 and total_count > len(records)
@@ -657,6 +681,8 @@ class AnchorageParcelsPlugin(MCPPlugin):
                 f"'how many?' questions, or page with offset / narrow the "
                 f"WHERE clause."
             )
+        if notices:
+            lines.extend(notices)
         lines.append("")
         if heading:
             lines.append(heading)
@@ -674,12 +700,43 @@ class AnchorageParcelsPlugin(MCPPlugin):
                 f"use it directly instead of counting the records below."
             )
         lines.append("")
-        for i, record in enumerate(records, 1):
-            lines.append(f"Record {i}:")
-            for key, value in record.items():
-                lines.append(f"  {key}: {self._render_value(key, value)}")
+        if len(records) > self.COMPACT_FORMAT_THRESHOLD:
+            # Large result sets: pipe-delimited table (header row +
+            # one row per record) instead of per-record blocks, which
+            # cost ~3x the bytes of the data they carry.
+            columns: List[str] = list(records[0].keys())
+            seen = set(columns)
+            for record in records[1:]:
+                for key in record:
+                    if key not in seen:
+                        seen.add(key)
+                        columns.append(key)
+            lines.append(
+                f"(Compact format: {len(records)} records, one "
+                f"pipe-delimited row each; the first row is the header.)"
+            )
+            lines.append(" | ".join(columns))
+            for record in records:
+                lines.append(
+                    " | ".join(
+                        self._table_cell(self._render_value(k, record.get(k)))
+                        for k in columns
+                    )
+                )
             lines.append("")
+        else:
+            for i, record in enumerate(records, 1):
+                lines.append(f"Record {i}:")
+                for key, value in record.items():
+                    lines.append(f"  {key}: {self._render_value(key, value)}")
+                lines.append("")
         return "\n".join(lines)
+
+    @staticmethod
+    def _table_cell(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).replace("|", "\\|")
 
     def _no_data_hint(self, where_clause: str) -> str:
         """Recovery hints appended after an empty result (pattern from
@@ -719,7 +776,7 @@ class AnchorageParcelsPlugin(MCPPlugin):
         parcel_id = str(args.get("parcel_id") or "").strip()
         if not parcel_id:
             raise ValueError("parcel_id is required")
-        limit = max(1, min(int(args.get("limit", 10)), 100))
+        limit, clamp_note = self._clamp_limit(args, default=10, maximum=100)
         out_fields = self._validate_out_fields(args.get("out_fields"))
         category_clause = self._category_clause(args.get("category"))
 
@@ -751,6 +808,7 @@ class AnchorageParcelsPlugin(MCPPlugin):
                 where=where,
                 out_fields=out_fields,
                 heading=heading,
+                notices=[clamp_note] if clamp_note else None,
             )
 
         # Zero exact hits -> LIKE fallback on the 11-digit column with a
@@ -955,7 +1013,7 @@ class AnchorageParcelsPlugin(MCPPlugin):
         name = str(args.get("name") or "").strip()
         if not name:
             raise ValueError("name is required")
-        limit = max(1, min(int(args.get("limit", 20)), self.MAX_LIMIT))
+        limit, clamp_note = self._clamp_limit(args, default=20, maximum=self.MAX_LIMIT)
         category_clause = self._category_clause(args.get("category"))
         owner_field = self._f("owner_name")
         needle = name.upper().replace("'", "''")
@@ -979,6 +1037,7 @@ class AnchorageParcelsPlugin(MCPPlugin):
                 f"## Parcels with owner matching `{name}` "
                 f"(ordered by appraised value, highest first)\n"
             ),
+            notices=[clamp_note] if clamp_note else None,
         )
         if not records:
             text += self._no_data_hint(where)
@@ -990,7 +1049,7 @@ class AnchorageParcelsPlugin(MCPPlugin):
         address = str(args.get("address") or "").strip()
         if not address:
             raise ValueError("address is required")
-        limit = max(1, min(int(args.get("limit", 10)), 100))
+        limit, clamp_note = self._clamp_limit(args, default=10, maximum=100)
         needle = address.upper().replace("'", "''")
         situs_field = self._f("situs_address")
         where = f"{situs_field} LIKE '%{needle}%'"
@@ -1008,6 +1067,7 @@ class AnchorageParcelsPlugin(MCPPlugin):
                     f"## Parcels matching address `{address}` "
                     f"(matched directly on {situs_field})\n"
                 ),
+                notices=[clamp_note] if clamp_note else None,
             )
 
         # Fallback: resolve via the address-point layer, then
@@ -1072,6 +1132,7 @@ class AnchorageParcelsPlugin(MCPPlugin):
             limit,
             out_fields=self._summary_fields,
             heading=None,
+            notices=[clamp_note] if clamp_note else None,
         )
         return "\n".join(lines) + "\n" + body
 
@@ -1156,7 +1217,9 @@ class AnchorageParcelsPlugin(MCPPlugin):
         WhereValidator.validate_against_schema(where, self._live_fields)
         out_fields = self._validate_out_fields(args.get("out_fields"))
         order_by = OrderByValidator.validate(str(args.get("order_by") or ""))
-        limit = max(1, min(int(args.get("limit", 100)), self.MAX_LIMIT))
+        limit, clamp_note = self._clamp_limit(args, default=100, maximum=self.MAX_LIMIT)
+        if clamp_note:
+            clamp_note += " Page with offset= for more."
         offset = max(0, int(args.get("offset", 0)))
         category_clause = self._category_clause(args.get("category"))
         full_where = self._combine_where(where, category_clause)
@@ -1177,6 +1240,7 @@ class AnchorageParcelsPlugin(MCPPlugin):
             total_count=total,
             where=full_where,
             out_fields=out_fields,
+            notices=[clamp_note] if clamp_note else None,
         )
         remaining = None
         if total is not None:

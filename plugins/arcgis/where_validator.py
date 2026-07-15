@@ -50,6 +50,38 @@ class WhereValidator:
 
     MAX_LENGTH = 2000
 
+    @staticmethod
+    def _mask_string_literals(where: str) -> str:
+        """Blank out the contents of '...' literals so the forbidden-token
+        scan only sees SQL code, never quoted data values (a legitimate
+        address like '%UNION%' or owner 'SMITH; JONES' must not trip it).
+
+        Handles the SQL-standard '' escape for a literal quote. Raises on
+        an unbalanced quote -- itself a good reason to reject the clause.
+        """
+        out = []
+        i, n = 0, len(where)
+        in_str = False
+        while i < n:
+            c = where[i]
+            if not in_str:
+                out.append(c)
+                if c == "'":
+                    in_str = True
+                i += 1
+            elif c == "'":
+                if i + 1 < n and where[i + 1] == "'":
+                    i += 2  # escaped '' inside the literal
+                    continue
+                in_str = False
+                out.append(c)
+                i += 1
+            else:
+                i += 1  # mask literal content
+        if in_str:
+            raise ValueError("Unbalanced quote in WHERE clause")
+        return "".join(out)
+
     @classmethod
     def validate(cls, where: str) -> str:
         """Validate and sanitize a WHERE clause string.
@@ -62,7 +94,9 @@ class WhereValidator:
 
         Raises:
             ValueError: If the clause contains forbidden SQL keywords or
-                suspicious substrings (stacked queries, comments, etc.).
+                suspicious substrings (stacked queries, comments, etc.)
+                outside of quoted string literals, or an unbalanced
+                quote.
         """
         if not where:
             return "1=1"
@@ -76,16 +110,20 @@ class WhereValidator:
                 f"WHERE clause exceeds max length ({cls.MAX_LENGTH} chars)"
             )
 
-        lowered = where.lower()
+        # Scan a copy with string-literal contents masked out: quoted
+        # values are data, not SQL, and must never trip the blocklist.
+        masked = cls._mask_string_literals(where)
+
+        lowered = masked.lower()
         for bad in cls.FORBIDDEN_SUBSTRINGS:
             if bad.lower() in lowered:
                 raise ValueError(
                     f"Forbidden substring {bad!r} detected in WHERE clause"
                 )
 
-        where_upper = where.upper()
+        masked_upper = masked.upper()
         for keyword in cls.FORBIDDEN_KEYWORDS:
-            if re.search(rf"\b{keyword}\b", where_upper):
+            if re.search(rf"\b{keyword}\b", masked_upper):
                 raise ValueError(
                     f"Forbidden keyword '{keyword}' detected in WHERE clause"
                 )
