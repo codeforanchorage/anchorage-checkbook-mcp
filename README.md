@@ -1,4 +1,4 @@
-# OpenContext
+# OpenContext — Anchorage Open Checkbook fork
 
 <p align="center">
   <img src="docs/opencontext_logo.png" alt="OpenContext Logo" width="400">
@@ -8,21 +8,31 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
+This fork of [OpenContext](https://github.com/thealphacubicle/OpenContext)
+deploys the **Anchorage Open Checkbook MCP** (`anchorage_checkbook`
+plugin) — read-only tools over the Municipality of Anchorage's
+unaudited expenditure, payroll, procurement, and revenue tables, with
+the dataset's traps (duplicate double-loads, snapshot dates, net
+amounts, unnormalized vendor names) encoded in tool behavior. See
+[docs/CHECKBOOK.md](docs/CHECKBOOK.md) and
+[METHODOLOGY.md](METHODOLOGY.md) — this server's totals deliberately
+differ from the public MOA dashboard (duplicates are filtered by
+default).
+
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Configure (create config, enable one data source)
-cp config-example.yaml config.yaml
-# Edit config.yaml - set enabled: true for one plugin
+# 1. Configure (this fork ships its config ready to go)
+cp config-anchorage-checkbook.yaml config.yaml
 
 # 2. Test locally
 pip install aiohttp
 python3 scripts/local_server.py
 
 # 3. Deploy
-./scripts/deploy.sh
+./scripts/deploy.sh --environment staging
 ```
 
 Connect via **Claude Connectors** (same steps on both Claude.ai and Claude Desktop):
@@ -46,7 +56,9 @@ See [Getting Started](docs/GETTING_STARTED.md) for full setup.
 | [Architecture](docs/ARCHITECTURE.md)       | System design and plugins                       |
 | [Deployment](docs/DEPLOYMENT.md)           | AWS, Terraform, monitoring                      |
 | [Testing](docs/TESTING.md)                 | Local testing (Terminal, Claude, MCP Inspector) |
-| [Anchorage Parcels](docs/PARCELS.md)       | Parcel/assessment MCP server (this repo's plugin) |
+| [Anchorage Checkbook](docs/CHECKBOOK.md)   | Open Checkbook MCP server (**this fork's plugin**) |
+| [Methodology](METHODOLOGY.md)              | The dedup-by-default decision and why totals differ from the MOA dashboard |
+| [Anchorage Parcels](docs/PARCELS.md)       | Parcel/assessment MCP server (deployed from its own fork) |
 
 
 ---

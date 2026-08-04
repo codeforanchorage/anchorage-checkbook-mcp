@@ -1,0 +1,103 @@
+---
+server_name: "Anchorage Open Checkbook MCP"
+description: "Municipality of Anchorage Open Checkbook - unaudited expenditures, payroll costs, procurement, and revenue with data-quality guardrails built in"
+organization: "Municipality of Anchorage"
+
+# Per-deployment guidance returned in the MCP `initialize` response.
+# Applies to EVERY consumer -- the text is model-agnostic. This is the
+# single highest-leverage place to state the data traps: it reaches
+# every consumer before any tool is called.
+instructions: |
+  You are connected to the Municipality of Anchorage Open Checkbook --
+  UNAUDITED municipal finance tables (non-payroll and payroll
+  expenditures, a payroll cost rollup, procurement, and revenue)
+  republished periodically from the MOA accounting system. These tools
+  answer WHO-GOT-PAID / HOW-MUCH-DID-MOA-SPEND questions in one or two
+  calls -- the table schemas and data quirks are baked in.
+
+  Data facts to apply to every number you report:
+  - All dollar figures are NET of offsetting entries (single rows run
+    from about -$749M to +$743M). Gross totals are meaningless here.
+  - Duplicate rows are filtered out by default (Duplicate='No'). The
+    upstream ETL double-loaded whole fiscal years as exact shadow
+    copies (FY2023 on every table; FY2023 AND FY2026 in Revenue), so
+    totals from this server will NOT match the public MOA Open
+    Checkbook dashboard unless the dashboard user also filters the
+    Duplicate column. This server's defaults are the corrected
+    figures.
+  - The time axis is Fiscal_Year plus Month_Fiscal_Period (1-16;
+    periods 13-16 are year-end adjustment periods, not calendar months
+    -- never map them to month names). PubDate is an ETL snapshot
+    stamp, identical on every row; date filters on it are rejected.
+  - Vendor names are unnormalized: one entity may appear under several
+    spellings (e.g. TransUnion appears at least three ways).
+    search_by_vendor lists distinct spellings separately; never assume
+    one spelling's total covers the whole entity.
+  - Location is the vendor's billing city/state, NOT Anchorage
+    geography. Build no geographic analysis on it.
+  - Known gaps: Revenue has no FY2024 at all; FY2026 is partial
+    (loaded through fiscal period 7); Procurement FY2025 (~$1.18B) is
+    an outlier, likely a bulk encumbrance load.
+
+  Aggregate questions are spending_stats calls, not record listings.
+  Worked example -- "net non-payroll spending by department in 2025":
+    spending_stats(table=0, group_by=['Business_Area'],
+                   fiscal_year=2025)
+  (returns net sum + row count per group; stat_type count/sum/avg/min/
+  max/stddev/var/percentile_cont is also available -- percentile_cont
+  with percentile=0.5 is the median.)
+
+  Typical flow: list_tables to pick a table; spending_stats for totals
+  and rankings; search_by_vendor for payee lookups (top_vendors for a
+  quick ranking); get_line_items for raw rows; list_field_values to
+  discover valid filter values; query_checkbook only when a structured
+  tool cannot express the filter.
+
+  All tools are READ-ONLY and safe to call without confirmation.
+
+  This server covers ONLY the Open Checkbook financial tables. Route
+  property/assessment questions to the Anchorage Parcels MCP, other
+  municipal layers and any spatial analysis to the Anchorage GIS MCP,
+  and municipal code questions to the Anchorage Municipal Code MCP.
+
+plugins:
+  anchorage_checkbook:
+    enabled: true
+    # MOA Open Checkbook hosted Feature Service ROOT (tables 0-5; the
+    # OC_Point layer is an empty map-widget placeholder and is never
+    # exposed). Public, no auth, capabilities Query,Extract.
+    service_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/MOA_OpenCheckbook_Hosted/FeatureServer"
+    city_name: "Municipality of Anchorage"
+    timeout: 30
+
+  anchorage_parcels:
+    enabled: false
+    property_layer_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/PropertyInformation_Hosted/FeatureServer/0"
+    addresses_layer_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/Addresses_Hosted/FeatureServer/0"
+    subdivisions_layer_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/Subdivisions_Hosted/FeatureServer/0"
+    city_name: "Municipality of Anchorage"
+    field_map: {}
+    timeout: 30
+
+  ckan:
+    enabled: false
+    base_url: "https://data.example.gov/"
+    portal_url: "https://data.example.gov/"
+    city_name: "Example"
+    timeout: 120
+
+  arcgis:
+    enabled: false
+    portal_url: "https://hub.arcgis.com"
+    city_name: "Example"
+    timeout: 120
+
+aws:
+  region: "us-west-2"
+  lambda_name: "anchorage-checkbook-mcp-staging"
+  lambda_memory: 512
+  lambda_timeout: 60
+
+logging:
+  level: "INFO"
+  format: "json"

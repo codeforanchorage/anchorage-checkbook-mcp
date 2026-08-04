@@ -72,14 +72,15 @@ if [ "$ENVIRONMENT" != "staging" ] && [ "$ENVIRONMENT" != "prod" ]; then
 fi
 
 # Default workspace per environment when not explicitly provided.
-# NOTE: this fork deploys the PARCELS server. The GIS server lives in the
-# anchorage-gis-* workspaces of the same state bucket -- never point this
-# script at those or terraform will plan to rename the GIS Lambda.
+# NOTE: this fork deploys the CHECKBOOK server. The parcels and GIS
+# servers live in the anchorage-parcels-* / anchorage-gis-* workspaces
+# of the same state bucket -- never point this script at those or
+# terraform will plan to rename their Lambdas.
 if [ -z "$TF_WORKSPACE" ]; then
     if [ "$ENVIRONMENT" = "prod" ]; then
-        TF_WORKSPACE="anchorage-parcels-prod"
+        TF_WORKSPACE="anchorage-checkbook-prod"
     else
-        TF_WORKSPACE="anchorage-parcels-staging"
+        TF_WORKSPACE="anchorage-checkbook-staging"
     fi
 fi
 

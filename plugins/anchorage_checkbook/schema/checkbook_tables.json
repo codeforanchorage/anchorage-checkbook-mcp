@@ -1,0 +1,369 @@
+{
+  "0": {
+    "id": 0,
+    "name": "OC_UnauditedExpenditure_NonPayroll",
+    "type": "Table",
+    "fields": [
+      {
+        "name": "OBJECTID",
+        "type": "esriFieldTypeOID",
+        "alias": "OBJECTID"
+      },
+      {
+        "name": "SourceFile",
+        "type": "esriFieldTypeString",
+        "alias": "SourceFile"
+      },
+      {
+        "name": "Fund",
+        "type": "esriFieldTypeString",
+        "alias": "Fund"
+      },
+      {
+        "name": "Location",
+        "type": "esriFieldTypeString",
+        "alias": "Location"
+      },
+      {
+        "name": "Duplicate",
+        "type": "esriFieldTypeString",
+        "alias": "Duplicate"
+      },
+      {
+        "name": "Business_Area",
+        "type": "esriFieldTypeString",
+        "alias": "Business_Area"
+      },
+      {
+        "name": "Fiscal_Year",
+        "type": "esriFieldTypeString",
+        "alias": "Fiscal_Year"
+      },
+      {
+        "name": "G_L_Account",
+        "type": "esriFieldTypeString",
+        "alias": "G_L_Account"
+      },
+      {
+        "name": "Month_Fiscal_Period",
+        "type": "esriFieldTypeInteger",
+        "alias": "Month_Fiscal_Period"
+      },
+      {
+        "name": "Vendor_Name",
+        "type": "esriFieldTypeString",
+        "alias": "Vendor_Name"
+      },
+      {
+        "name": "PubDate",
+        "type": "esriFieldTypeDate",
+        "alias": "PubDate"
+      },
+      {
+        "name": "Amount",
+        "type": "esriFieldTypeDouble",
+        "alias": "Amount"
+      }
+    ]
+  },
+  "1": {
+    "id": 1,
+    "name": "OC_UnauditedExpenditure_Payroll",
+    "type": "Table",
+    "fields": [
+      {
+        "name": "OBJECTID",
+        "type": "esriFieldTypeOID",
+        "alias": "OBJECTID"
+      },
+      {
+        "name": "SourceFile",
+        "type": "esriFieldTypeString",
+        "alias": "SourceFile"
+      },
+      {
+        "name": "Business_Area",
+        "type": "esriFieldTypeString",
+        "alias": "Business_Area"
+      },
+      {
+        "name": "Fiscal_Year",
+        "type": "esriFieldTypeString",
+        "alias": "Fiscal_Year"
+      },
+      {
+        "name": "Fund",
+        "type": "esriFieldTypeString",
+        "alias": "Fund"
+      },
+      {
+        "name": "G_L_Account",
+        "type": "esriFieldTypeString",
+        "alias": "G_L_Account"
+      },
+      {
+        "name": "Month_Fiscal_Period",
+        "type": "esriFieldTypeInteger",
+        "alias": "Month_Fiscal_Period"
+      },
+      {
+        "name": "Duplicate",
+        "type": "esriFieldTypeString",
+        "alias": "Duplicate"
+      },
+      {
+        "name": "PubDate",
+        "type": "esriFieldTypeDate",
+        "alias": "PubDate"
+      },
+      {
+        "name": "Amount",
+        "type": "esriFieldTypeDouble",
+        "alias": "Amount"
+      }
+    ]
+  },
+  "2": {
+    "id": 2,
+    "name": "OC_UnauditedPayroll",
+    "type": "Table",
+    "fields": [
+      {
+        "name": "OBJECTID",
+        "type": "esriFieldTypeOID",
+        "alias": "OBJECTID"
+      },
+      {
+        "name": "SourceFile",
+        "type": "esriFieldTypeString",
+        "alias": "SourceFile"
+      },
+      {
+        "name": "Business_Area",
+        "type": "esriFieldTypeString",
+        "alias": "Business_Area"
+      },
+      {
+        "name": "Fiscal_Year",
+        "type": "esriFieldTypeString",
+        "alias": "Fiscal_Year"
+      },
+      {
+        "name": "Duplicate",
+        "type": "esriFieldTypeString",
+        "alias": "Duplicate"
+      },
+      {
+        "name": "PubDate",
+        "type": "esriFieldTypeDate",
+        "alias": "PubDate"
+      },
+      {
+        "name": "Liabilities_Benefits",
+        "type": "esriFieldTypeDouble",
+        "alias": "Liabilities_Benefits"
+      },
+      {
+        "name": "Overtime",
+        "type": "esriFieldTypeDouble",
+        "alias": "Overtime"
+      },
+      {
+        "name": "Salaries_Wages",
+        "type": "esriFieldTypeDouble",
+        "alias": "Salaries_Wages"
+      },
+      {
+        "name": "Total_Payroll_Cost",
+        "type": "esriFieldTypeDouble",
+        "alias": "Total_Payroll_Cost"
+      }
+    ]
+  },
+  "3": {
+    "id": 3,
+    "name": "OC_UnauditedProcurement",
+    "type": "Table",
+    "fields": [
+      {
+        "name": "OBJECTID",
+        "type": "esriFieldTypeOID",
+        "alias": "OBJECTID"
+      },
+      {
+        "name": "SourceFile",
+        "type": "esriFieldTypeString",
+        "alias": "SourceFile"
+      },
+      {
+        "name": "Location",
+        "type": "esriFieldTypeString",
+        "alias": "Location"
+      },
+      {
+        "name": "Duplicate",
+        "type": "esriFieldTypeString",
+        "alias": "Duplicate"
+      },
+      {
+        "name": "Business_Area",
+        "type": "esriFieldTypeString",
+        "alias": "Business_Area"
+      },
+      {
+        "name": "Fiscal_Year",
+        "type": "esriFieldTypeString",
+        "alias": "Fiscal_Year"
+      },
+      {
+        "name": "Month_Fiscal_Period",
+        "type": "esriFieldTypeInteger",
+        "alias": "Month_Fiscal_Period"
+      },
+      {
+        "name": "PO_Description",
+        "type": "esriFieldTypeString",
+        "alias": "PO_Description"
+      },
+      {
+        "name": "Process_Type",
+        "type": "esriFieldTypeString",
+        "alias": "Process_Type"
+      },
+      {
+        "name": "Purchase_Order",
+        "type": "esriFieldTypeString",
+        "alias": "Purchase_Order"
+      },
+      {
+        "name": "Vendor_Name",
+        "type": "esriFieldTypeString",
+        "alias": "Vendor_Name"
+      },
+      {
+        "name": "PubDate",
+        "type": "esriFieldTypeDate",
+        "alias": "PubDate"
+      },
+      {
+        "name": "Amount",
+        "type": "esriFieldTypeDouble",
+        "alias": "Amount"
+      }
+    ]
+  },
+  "4": {
+    "id": 4,
+    "name": "OC_UnauditedRevenue",
+    "type": "Table",
+    "fields": [
+      {
+        "name": "OBJECTID",
+        "type": "esriFieldTypeOID",
+        "alias": "OBJECTID"
+      },
+      {
+        "name": "SourceFile",
+        "type": "esriFieldTypeString",
+        "alias": "SourceFile"
+      },
+      {
+        "name": "Business_Area",
+        "type": "esriFieldTypeString",
+        "alias": "Business_Area"
+      },
+      {
+        "name": "Customer_Business_Name",
+        "type": "esriFieldTypeString",
+        "alias": "Customer_Business_Name"
+      },
+      {
+        "name": "Fiscal_Year",
+        "type": "esriFieldTypeString",
+        "alias": "Fiscal_Year"
+      },
+      {
+        "name": "Fund",
+        "type": "esriFieldTypeString",
+        "alias": "Fund"
+      },
+      {
+        "name": "G_L_Account",
+        "type": "esriFieldTypeString",
+        "alias": "G_L_Account"
+      },
+      {
+        "name": "Month_Fiscal_Period",
+        "type": "esriFieldTypeInteger",
+        "alias": "Month_Fiscal_Period"
+      },
+      {
+        "name": "Duplicate",
+        "type": "esriFieldTypeString",
+        "alias": "Duplicate"
+      },
+      {
+        "name": "PubDate",
+        "type": "esriFieldTypeDate",
+        "alias": "PubDate"
+      },
+      {
+        "name": "Amount",
+        "type": "esriFieldTypeDouble",
+        "alias": "Amount"
+      }
+    ]
+  },
+  "5": {
+    "id": 5,
+    "name": "OC_UnaudRev_vs_Exp",
+    "type": "Table",
+    "fields": [
+      {
+        "name": "OBJECTID",
+        "type": "esriFieldTypeOID",
+        "alias": "OBJECTID"
+      },
+      {
+        "name": "SourceFile",
+        "type": "esriFieldTypeString",
+        "alias": "SourceFile"
+      },
+      {
+        "name": "Fiscal_Year",
+        "type": "esriFieldTypeString",
+        "alias": "Fiscal_Year"
+      },
+      {
+        "name": "Fund",
+        "type": "esriFieldTypeString",
+        "alias": "Fund"
+      },
+      {
+        "name": "Duplicate",
+        "type": "esriFieldTypeString",
+        "alias": "Duplicate"
+      },
+      {
+        "name": "PubDate",
+        "type": "esriFieldTypeDate",
+        "alias": "PubDate"
+      },
+      {
+        "name": "Difference",
+        "type": "esriFieldTypeDouble",
+        "alias": "Difference"
+      },
+      {
+        "name": "Expenditure",
+        "type": "esriFieldTypeDouble",
+        "alias": "Expenditure"
+      },
+      {
+        "name": "Revenue",
+        "type": "esriFieldTypeDouble",
+        "alias": "Revenue"
+      }
+    ]
+  }
+}

@@ -1,10 +1,10 @@
-lambda_name = "anchorage-parcels-mcp-prod"
+lambda_name = "anchorage-checkbook-mcp-prod"
 stage_name  = "prod"
 aws_region  = "us-west-2"
 config_file = "config.yaml"
-# 512 MB / 60 s: the parcels tools are attribute queries and server-side
-# statistics against a single Feature Layer -- no polygon-cache or
-# point-in-polygon batch workloads like the GIS server's aggregate tools.
+# 512 MB / 60 s: every checkbook tool is a single attribute query or
+# server-side statistics call against one Feature Service table -- no
+# geometry, no polygon caches, no batch workloads.
 lambda_memory  = 512
 lambda_timeout = 60
 
@@ -15,26 +15,22 @@ api_burst_limit = 10
 # DNS lives in Dreamhost. Two CNAMEs required: the ACM validation record
 # (from `terraform output acm_validation_cname_*`) and the traffic record
 # pointing at `terraform output custom_domain_target`.
-custom_domain = "anchorage-parcels.codeforanchorage.org"
+custom_domain = "checkbook.codeforanchorage.org"
 
 # Cap concurrent Lambda executions. Cost and blast-radius protection;
 # conversational MCP traffic does not need horizontal scale.
 lambda_reserved_concurrency = 10
 
-# WAF per-IP rate limit (rolling 5-minute window). Same rationale as the
-# GIS deployment: ~1 rps sustained per IP is plenty for real users.
+# WAF per-IP rate limit (rolling 5-minute window). ~1 rps sustained per
+# IP is plenty for real users.
 waf_rate_limit_per_5min = 300
 
-# No M365 GCC Copilot consumer for the parcels server; public /mcp only.
+# No M365 GCC Copilot consumer for the checkbook server; public /mcp only.
 enable_gcc_route = false
 
-# Use the fleet-wide WAF instead of a dedicated ACL for this MCP. A dedicated
-# ACL costs ~$8/mo in fixed AWS charges regardless of traffic; the shared ACL
-# keeps this MCP's 300/5min limit as its own counter, aggregated on
-# (IP, Host) so it stays independent of the other MCPs sharing that limit.
-#
-# The effective limit now lives in mcp-stats' `fleet_waf_members` under the key
-# `anchorage-parcels` — change it there, not here. The rate-limit value above is retained
-# so that rolling back (use_shared_waf = false) restores the original limit.
-# See mcp-stats/docs/waf-consolidation.md.
-use_shared_waf = true
+# Dedicated WAF ACL until this MCP joins the fleet-wide shared ACL: flip
+# to true ONLY after adding an `anchorage-checkbook` entry to
+# `fleet_waf_members` in the mcp-stats repo (see
+# mcp-stats/docs/waf-consolidation.md) -- flipping early would associate
+# the stage with an ACL that carries no rule for this MCP.
+use_shared_waf = false
