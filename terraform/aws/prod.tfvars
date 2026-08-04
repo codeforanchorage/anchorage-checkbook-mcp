@@ -28,9 +28,14 @@ waf_rate_limit_per_5min = 300
 # No M365 GCC Copilot consumer for the checkbook server; public /mcp only.
 enable_gcc_route = false
 
-# Dedicated WAF ACL until this MCP joins the fleet-wide shared ACL: flip
-# to true ONLY after adding an `anchorage-checkbook` entry to
-# `fleet_waf_members` in the mcp-stats repo (see
-# mcp-stats/docs/waf-consolidation.md) -- flipping early would associate
-# the stage with an ACL that carries no rule for this MCP.
-use_shared_waf = false
+# Use the fleet-wide WAF instead of a dedicated ACL for this MCP. A dedicated
+# ACL costs ~$8/mo in fixed AWS charges regardless of traffic; the shared ACL
+# keeps this MCP's 300/5min limit as its own counter, aggregated on
+# (IP, Host) so it stays independent of the other MCPs sharing that limit.
+#
+# The effective limit lives in mcp-stats' `fleet_waf_members` under the key
+# `anchorage-checkbook` (added 2026-08-04) — change it there, not here. The
+# rate-limit value above is retained so that rolling back
+# (use_shared_waf = false) restores the original limit.
+# See mcp-stats/docs/waf-consolidation.md.
+use_shared_waf = true
