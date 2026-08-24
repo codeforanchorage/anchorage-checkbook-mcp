@@ -219,6 +219,11 @@ terraform/*/lambda-deployment.zip
 terraform/*/backups/
 terraform/*/state-backup-*.json
 
+# Terraform plan files (embed account id, API Gateway ids and ARNs)
+terraform/*/tfplan
+**/*.tfplan
+tfplan
+
 # OpenContext client binaries
 opencontext-client
 opencontext-client-*

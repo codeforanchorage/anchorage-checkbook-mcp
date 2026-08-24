@@ -17,3 +17,16 @@ custom_domain = ""
 lambda_reserved_concurrency = 5
 waf_rate_limit_per_5min     = 300
 enable_gcc_route            = false
+
+# Use the fleet-wide WAF instead of a dedicated ACL. A dedicated ACL costs
+# ~$8/mo in fixed AWS charges (~$5/ACL + $1/rule) regardless of traffic.
+#
+# Staging has no custom domain, so its host is the raw execute-api name, which
+# is NOT a member of the fleet ACL's Host-scoped rate rules. It therefore lands
+# on the catch-all `rate-limit-unmatched-host` rule: 300/5min per IP -- exactly
+# what the dedicated ACL enforced -- plus the same KnownBadInputs and
+# CommonRuleSet managed groups. No membership entry in mcp-stats is needed.
+#
+# The rate-limit value above stops being read once this is true; it is retained
+# so that rolling back (use_shared_waf = false) restores the original limit.
+use_shared_waf = true
