@@ -2058,6 +2058,23 @@ class AnchorageCheckbookPlugin(MCPPlugin):
 
     # ── Tool definitions ──────────────────────────────────────────────
 
+    # Human-readable display names. The wire `name` is prefixed
+    # (`anchorage_checkbook__spending_stats`) because it must be a stable,
+    # collision-free identifier; that string reads poorly in a client's tool
+    # picker. Clients resolve display names as title -> annotations.title ->
+    # name, so these are what a user actually sees. Keyed by the UNPREFIXED
+    # tool name, matching the ToolDefinition entries below.
+    TOOL_TITLES = {
+        "list_tables": "List Tables",
+        "get_table_schema": "Table Schema",
+        "spending_stats": "Spending Stats",
+        "search_by_vendor": "Search by Vendor",
+        "top_vendors": "Top Vendors",
+        "get_line_items": "Line Items",
+        "list_field_values": "Field Values",
+        "query_checkbook": "Query Checkbook",
+    }
+
     def get_tools(self) -> List[ToolDefinition]:
         annotations = {"readOnlyHint": True, "openWorldHint": True}
         city = (
@@ -2135,7 +2152,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             "description": f"Max results (1-{maximum}; clamps are echoed "
             f"in the provenance line)",
         }
-        return [
+        tools = [
             ToolDefinition(
                 name="list_tables",
                 description=(
@@ -2488,6 +2505,19 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 annotations=annotations,
             ),
         ]
+
+        # Uniform pass over the definitions above. Every tool here is a
+        # read-only query against a public Feature Service, so the MCP
+        # safety hints are set uniformly, which lets clients skip
+        # per-call confirmation prompts.
+        #
+        # Deliberately NOT set: `idempotentHint`. The MCP schema documents
+        # it as "meaningful only when readOnlyHint == false", so on a
+        # read-only tool it would carry no information.
+        for tool in tools:
+            if tool.title is None:
+                tool.title = self.TOOL_TITLES.get(tool.name)
+        return tools
 
     # ── Dispatch ──────────────────────────────────────────────────────
 
