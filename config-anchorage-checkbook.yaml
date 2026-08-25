@@ -68,7 +68,13 @@ plugins:
     # exposed). Public, no auth, capabilities Query,Extract.
     service_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/MOA_OpenCheckbook_Hosted/FeatureServer"
     city_name: "Municipality of Anchorage"
-    timeout: 30
+    # Per-upstream-request HTTP timeout. MUST stay below lambda_timeout
+    # (28s) or a hung ArcGIS call outlives the Lambda: the function is
+    # killed mid-flight and the caller gets an opaque 502 instead of a
+    # readable "upstream timed out" tool error. 20s leaves ~8s to finish
+    # and return. Observed worst-case prod duration is 5.9s, so this is
+    # far above anything legitimate.
+    timeout: 20
 
   anchorage_parcels:
     enabled: false
@@ -94,9 +100,28 @@ plugins:
 
 aws:
   region: "us-west-2"
+  # NOT read by Terraform. main.tf takes the function name from
+  # var.lambda_name (terraform/aws/<env>.tfvars), which is set for BOTH
+  # environments -- so this key does NOT decide which environment a
+  # deploy targets; `./scripts/deploy.sh -e staging|prod` does, by
+  # picking the tfvars file and the workspace. Only
+  # scripts/local_server.py reads it, to derive a display name.
   lambda_name: "anchorage-checkbook-mcp-staging"
+  # lambda_memory and lambda_timeout DO take precedence over the
+  # matching variables in <env>.tfvars (see the locals block in
+  # terraform/aws/main.tf) -- and this one file feeds BOTH staging and
+  # prod, so a value set here applies to both. Change them HERE; the
+  # tfvars copies are kept in sync only so nobody is misled by reading
+  # them.
   lambda_memory: 512
-  lambda_timeout: 60
+  # MUST stay under the API Gateway integration timeout (29s, a hard
+  # REST limit that is not adjustable). Above it the gateway returns 504
+  # while the Lambda keeps running -- billing compute the client already
+  # gave up on and, worse, holding one of only 10 (prod) / 5 (staging)
+  # reserved-concurrency slots for the remainder. 28s guarantees the
+  # Lambda self-terminates first, so the timeout is attributed in
+  # Lambda's own metrics and the slot frees at once.
+  lambda_timeout: 28
 
 logging:
   level: "INFO"

@@ -65,7 +65,21 @@ New plugins must implement `MCPPlugin` (or `DataPlugin` for data sources). Place
 
 ## Configuration
 
-Copy `config-example.yaml` to `config.yaml`. Enable exactly one plugin. Config supports `${ENV_VAR}` substitution. For Lambda, config is serialized to the `OPENCONTEXT_CONFIG` env var by Terraform.
+Copy `config-anchorage-checkbook.yaml` to `config.yaml` (this fork ships its config ready to go). Enable exactly one plugin. Config supports `${ENV_VAR}` substitution. For Lambda, `config.yaml` is shipped *inside* the deployment package and read at runtime by `server/http_handler.py::_packaged_config_path` — not via the `OPENCONTEXT_CONFIG` env var, which AWS caps at 4KB.
+
+`config.yaml` is gitignored; `config-anchorage-checkbook.yaml` is the tracked source of truth and the two must stay byte-identical (pinned by `tests/test_deployment_config.py`). deploy.sh packages `config.yaml`, so a fix applied to only one of them ships half-applied.
+
+Two AWS sizing values are read from `config.yaml` in preference to `terraform/aws/<env>.tfvars` — `lambda_memory` and `lambda_timeout` (see the `locals` block in `terraform/aws/main.tf`). Editing them in the tfvars alone silently does nothing, and because one config file feeds both environments, a value set there applies to staging *and* prod. `lambda_name` uses the opposite precedence — the tfvars win — so `aws.lambda_name` in config.yaml does NOT decide which environment a deploy targets; `./scripts/deploy.sh -e staging|prod` does, by selecting the tfvars file and the Terraform workspace. Check `main.tf` per variable rather than assuming.
+
+**`terraform/aws/config.yaml` is a BUILD ARTIFACT, not a source file.** `scripts/deploy.sh` copies the repo-root `config.yaml` over it during packaging, and it is gitignored. Two consequences: edits made directly to it vanish on the next deploy, and a bare `terraform plan` run inside `terraform/aws/` (without the packaging steps) reads the STALE copy — so a config change shows up as nothing but a code-hash diff, and a "timeout fix" can appear to apply while changing nothing. Always go through `./scripts/deploy.sh -e <env>`, which repackages before planning.
+
+**Timeout ladder** — each layer must sit under the one above it:
+
+| Layer | Value | Why |
+|---|---|---|
+| API Gateway integration | 29s | hard REST limit, not adjustable |
+| Lambda (`lambda_timeout`) | 28s | self-terminates before the gateway gives up |
+| Plugin HTTP (`plugins.anchorage_checkbook.timeout`) | 20s | a hung upstream returns a readable tool error instead of the Lambda being killed mid-flight |
 
 ## CI
 

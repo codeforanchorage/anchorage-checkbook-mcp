@@ -5,8 +5,14 @@ config_file = "config.yaml"
 # 512 MB / 60 s: every checkbook tool is a single attribute query or
 # server-side statistics call against one Feature Service table -- no
 # geometry, no polygon caches, no batch workloads.
-lambda_memory  = 512
-lambda_timeout = 60
+lambda_memory = 512
+# Kept in sync with config.yaml, which WINS for this variable and for
+# lambda_memory (main.tf reads `local.config.aws.*` first and only falls back
+# to these vars). lambda_name uses the OPPOSITE precedence -- this file wins
+# there -- so check main.tf per variable rather than assuming. 28s sits just
+# under API Gateway's hard, non-adjustable 29s integration timeout so the
+# Lambda self-terminates before the gateway gives up.
+lambda_timeout = 28
 
 api_quota_limit = 3000
 api_rate_limit  = 5
