@@ -6,6 +6,7 @@ error handling, and HTTP request processing.
 
 import pytest
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 from core.mcp_server import MCPServer
@@ -367,8 +368,13 @@ class TestPing:
     """Test ping method handling."""
 
     @pytest.mark.asyncio
-    async def test_ping_returns_ok(self):
-        """Test that ping returns ok status."""
+    async def test_ping_returns_empty_object(self):
+        """The spec defines the ping result as an empty object.
+
+        The liveness signal is the response itself, not its body, so a
+        client MUST NOT need to read any field to know the server is up.
+        This previously returned {"status": "ok"}.
+        """
         plugin_manager = MagicMock(spec=PluginManager)
         server = MCPServer(plugin_manager)
 
@@ -384,7 +390,7 @@ class TestPing:
         assert response is not None
         assert response["jsonrpc"] == "2.0"
         assert response["id"] == 1
-        assert response["result"]["status"] == "ok"
+        assert response["result"] == {}
 
 
 class TestNotifications:
@@ -429,8 +435,12 @@ class TestUnknownMethods:
     """Test handling of unknown methods."""
 
     @pytest.mark.asyncio
-    async def test_unknown_method_raises_error(self):
-        """Test that unknown method raises ValueError."""
+    async def test_unknown_method_returns_method_not_found(self):
+        """An unknown method is a caller mistake: -32601, not -32603.
+
+        Clients probe for optional methods routinely; answering "Internal
+        error" claims the server broke and buries real faults in the noise.
+        """
         plugin_manager = MagicMock(spec=PluginManager)
         server = MCPServer(plugin_manager)
 
@@ -445,7 +455,8 @@ class TestUnknownMethods:
 
         assert response is not None
         assert "error" in response
-        assert response["error"]["code"] == -32603
+        assert response["error"]["code"] == -32601
+        assert response["error"]["message"] == "Method not found"
         assert "Unknown method" in response["error"]["data"]
 
 
@@ -580,3 +591,121 @@ class TestHTTPRequestHandling:
         assert response["statusCode"] == 200
         # Headers are not modified by handle_http_request
         # They're just passed through for logging purposes
+
+
+class TestProtocolVersionNegotiation:
+    """Which revisions this server claims, and how it negotiates them."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "requested", ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+    )
+    async def test_supported_version_is_echoed(self, requested):
+        """A supported request is echoed back, never silently downgraded.
+
+        2025-11-25 is the case that regressed: current clients ask for it
+        and were being answered with 2025-03-26.
+        """
+        plugin_manager = MagicMock(spec=PluginManager)
+        plugin_manager.config = {}
+        server = MCPServer(plugin_manager)
+
+        response = await server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": requested},
+            }
+        )
+
+        assert response["result"]["protocolVersion"] == requested
+
+    @pytest.mark.asyncio
+    async def test_2026_07_28_is_not_claimed(self):
+        """That revision replaces the initialize handshake outright.
+
+        It needs per-request `_meta` plus a mandatory server/discover RPC --
+        a dual-era migration, not a tuple entry. Claiming it without
+        implementing it would strand clients that take us at our word.
+        """
+        assert "2026-07-28" not in MCPServer.SUPPORTED_PROTOCOL_VERSIONS
+
+        plugin_manager = MagicMock(spec=PluginManager)
+        plugin_manager.config = {}
+        server = MCPServer(plugin_manager)
+
+        response = await server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2026-07-28"},
+            }
+        )
+
+        # Falls back to a revision we really do implement.
+        assert (
+            response["result"]["protocolVersion"]
+            in MCPServer.SUPPORTED_PROTOCOL_VERSIONS
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_version_falls_back_to_default(self):
+        plugin_manager = MagicMock(spec=PluginManager)
+        plugin_manager.config = {}
+        server = MCPServer(plugin_manager)
+
+        response = await server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "1999-01-01"},
+            }
+        )
+
+        assert (
+            response["result"]["protocolVersion"]
+            == MCPServer.DEFAULT_PROTOCOL_VERSION
+        )
+
+
+class TestUnknownMethodLogging:
+    """A client probing an optional method must not look like a fault."""
+
+    @pytest.mark.asyncio
+    async def test_logged_as_warning_without_traceback(self, caplog):
+        plugin_manager = MagicMock(spec=PluginManager)
+        server = MCPServer(plugin_manager)
+
+        with caplog.at_level(logging.DEBUG, logger="core.mcp_server"):
+            await server.handle_request(
+                {"jsonrpc": "2.0", "id": 1, "method": "server/discover"}
+            )
+
+        records = [r for r in caplog.records if "server/discover" in r.getMessage()]
+        errors = [r for r in records if r.levelno >= logging.ERROR]
+        assert not errors, "an unknown method must not log at ERROR"
+        warnings = [r for r in records if r.levelno == logging.WARNING]
+        assert warnings, "expected a WARNING for the unknown method"
+        assert not any(r.exc_info for r in warnings), "no traceback expected"
+
+    @pytest.mark.asyncio
+    async def test_genuine_fault_still_logs_error_with_traceback(self, caplog):
+        """The distinction has to cut both ways or it is worthless."""
+        plugin_manager = MagicMock(spec=PluginManager)
+        plugin_manager.get_all_tools = MagicMock(
+            side_effect=RuntimeError("registry exploded")
+        )
+        server = MCPServer(plugin_manager)
+
+        with caplog.at_level(logging.DEBUG, logger="core.mcp_server"):
+            response = await server.handle_request(
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+            )
+
+        assert response["error"]["code"] == -32603
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert errors, "a genuine fault must still log at ERROR"
+        assert any(r.exc_info for r in errors), "a genuine fault keeps its traceback"

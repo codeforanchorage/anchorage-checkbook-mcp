@@ -1,5 +1,9 @@
 ---
 server_name: "Anchorage Open Checkbook MCP"
+# Surfaced in the MCP `initialize` response as serverInfo.version. Bump it
+# with any behaviour change worth telling a client apart by -- without it,
+# there is no way to tell from a connected client which build is deployed.
+server_version: "1.1.0"
 description: "Municipality of Anchorage Open Checkbook - unaudited expenditures, payroll costs, procurement, and revenue with data-quality guardrails built in"
 organization: "Municipality of Anchorage"
 
