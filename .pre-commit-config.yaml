@@ -18,7 +18,7 @@ repos:
 
   # Python: Ruff lint (with auto-fix) and format (matches CI: core/ plugins/ server/ tests/)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.1
+    rev: v0.15.11  # keep equal to the ruff pin in pyproject.toml [dev]
     hooks:
       - id: ruff-check
         args: [--fix, --unsafe-fixes]
