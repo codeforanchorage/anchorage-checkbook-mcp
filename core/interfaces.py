@@ -82,6 +82,15 @@ class ToolDefinition(BaseModel):
     """Definition of an MCP tool provided by a plugin."""
 
     name: str = Field(..., description="Tool name (without plugin prefix)")
+    title: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional human-readable display name. Clients resolve a tool's "
+            "display name as title -> annotations.title -> name, so this is "
+            "what users see in a tool picker while `name` stays the stable "
+            "programmatic identifier."
+        ),
+    )
     description: str = Field(..., description="Human-readable tool description")
     input_schema: Dict[str, Any] = Field(
         ..., description="JSON Schema for tool input parameters"

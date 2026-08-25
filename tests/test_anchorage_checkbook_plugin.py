@@ -231,6 +231,25 @@ class TestGetTools:
         for t in tools:
             assert t.annotations == {"readOnlyHint": True, "openWorldHint": True}
             assert t.description
+            # idempotentHint is documented as meaningful only when
+            # readOnlyHint is false, so it must not be advertised here.
+            assert "idempotentHint" not in t.annotations, t.name
+
+    def test_every_tool_has_a_title(self, plugin):
+        """`title` is the display name clients show instead of the prefixed
+        wire name. A tool added without an entry in TOOL_TITLES would fall
+        back to `anchorage_checkbook__whatever` silently, so fail loudly."""
+        tools = plugin.get_tools()
+
+        assert tools, "expected at least one tool"
+        for t in tools:
+            assert t.title, f"{t.name} has no title (add it to TOOL_TITLES)"
+
+    def test_no_stale_title_entries(self, plugin):
+        """A renamed or removed tool must not leave a dangling title."""
+        names = {t.name for t in plugin.get_tools()}
+        stale = set(type(plugin).TOOL_TITLES) - names
+        assert not stale, f"TOOL_TITLES has entries for missing tools: {stale}"
 
     def test_include_duplicates_exposed_and_defaults_false(self, plugin):
         tools = {t.name: t for t in plugin.get_tools()}

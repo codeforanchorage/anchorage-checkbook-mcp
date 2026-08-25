@@ -668,3 +668,46 @@ class TestLoadPluginClass:
             assert "does not define a class" in str(exc_info.value).lower()
             mock_import.assert_called_once_with("plugins.test_plugin.plugin")
             # Clean up any imported modules
+
+
+class TestToolTitleEmission:
+    """`title` is a top-level Tool field, not an annotation."""
+
+    @staticmethod
+    def _manager_with(tool_def):
+        config = {"plugins": {"ckan": {"enabled": True}}}
+        manager = PluginManager(config)
+        manager.tools = {"ckan__t": ("ckan", "t")}
+        plugin = MagicMock()
+        plugin.get_tools.return_value = [tool_def]
+        manager.plugins = {"ckan": plugin}
+        return manager
+
+    def test_title_is_emitted_top_level_not_as_an_annotation(self):
+        manager = self._manager_with(
+            ToolDefinition(
+                name="t",
+                title="Nice Name",
+                description="d",
+                input_schema={"type": "object"},
+                annotations={"readOnlyHint": True},
+            )
+        )
+
+        tool = manager.get_all_tools()[0]
+
+        assert tool["title"] == "Nice Name"
+        assert "title" not in tool["annotations"]
+        # The wire name is untouched, so dispatch is unaffected.
+        assert tool["name"] == "ckan__t"
+
+    def test_absent_title_is_omitted_entirely(self):
+        """Clients fall back to annotations.title then name; an empty or
+        null title would break that resolution order."""
+        manager = self._manager_with(
+            ToolDefinition(
+                name="t", description="d", input_schema={"type": "object"}
+            )
+        )
+
+        assert "title" not in manager.get_all_tools()[0]
