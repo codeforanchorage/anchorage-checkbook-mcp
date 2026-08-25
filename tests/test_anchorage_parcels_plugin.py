@@ -4,7 +4,8 @@ Verifies plugin initialization (including the schema-drift warning
 path), tool definitions, parcel-ID normalization across all four MOA
 input formats, WHERE construction (category filter, owner uppercasing),
 pagination math, statistics parameter mapping (including percentiles),
-and error handling. All HTTP is mocked; see scripts/smoke_parcels.py
+and error handling. All HTTP is mocked; the live smoke script for that
+plugin lives in the parcels fork, not here
 for the live end-to-end checks.
 """
 
