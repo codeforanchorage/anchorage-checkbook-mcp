@@ -131,6 +131,14 @@ CAVEAT_PERIOD_SCALE = "PERIOD_SCALE"
 CAVEAT_TABLE_EMPTY = "TABLE_EMPTY"
 CAVEAT_REFUNDS_LABEL = "REFUNDS_LABEL"
 CAVEAT_TRUNCATED = "TRUNCATED"
+CAVEAT_NO_ROWS_MATCHED = "NO_ROWS_MATCHED"
+CAVEAT_NULL_PAYEE_GROUP = "NULL_PAYEE_GROUP"
+
+# What a NULL payee actually is on table 0: ~54k post-dedup rows that are
+# journal entries, fund transfers and accounting lines. Rendered as a
+# blank cell it reads as "a vendor whose name we don't know", and when it
+# is grouped and ranked it reads as the largest vendor of all.
+NULL_PAYEE_LABEL = "(no payee -- journal entries, fund transfers, accounting lines)"
 
 # Fiscal periods 13-16 are year-end ADJUSTMENT periods, not calendar
 # months. Emitted as a caveat whenever a result can contain them, because
@@ -814,6 +822,48 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             return None
         return ADJUSTMENT_PERIOD_MIN <= value <= ADJUSTMENT_PERIOD_MAX
 
+    def _no_match_diagnostic(self, info: TableInfo, args: Dict[str, Any]) -> str:
+        """Why a filter might have matched nothing, and which tool answers.
+
+        A structural artefact that makes an answer read "none" when it
+        means "not recorded that way" is the worst failure mode this
+        server has, because $0 and "no such rows" look identical in a
+        table. Each branch below points at the tool that would actually
+        resolve the question.
+        """
+        hints: List[str] = []
+        if args.get("vendor_contains"):
+            entity = info.entity_field or "the payee field"
+            hints.append(
+                f"A vendor filter was applied and matched no rows. "
+                f"{entity} values are NOT normalized upstream, so an "
+                f"entity often exists only under a different spelling -- "
+                f"call search_by_vendor(name_contains=...) with a SHORTER "
+                f"fragment to list every spelling before concluding the "
+                f"payee received nothing."
+            )
+        if args.get("fiscal_year") is not None:
+            hints.append(
+                f"A fiscal_year filter was applied and matched no rows. "
+                f"Not every table covers every year -- call "
+                f"list_field_values(table={info.id}, field="
+                f"'{FISCAL_YEAR_FIELD}') to see which years exist here."
+            )
+        for arg_name, field_name in CONTAINS_FILTER_FIELDS:
+            if args.get(arg_name):
+                hints.append(
+                    f"A {arg_name} filter was applied and matched no rows. "
+                    f"Call list_field_values(table={info.id}, field="
+                    f"'{field_name}') to see the values that exist."
+                )
+                break
+        if not hints:
+            hints.append(
+                f"Call list_field_values(table={info.id}, field=...) to "
+                f"see which values exist before concluding a figure is zero."
+            )
+        return " ".join(hints)
+
     @staticmethod
     def _require_entity_field(info: TableInfo) -> str:
         """Resolve the payee field via the registry (trap 2.4 + §4.4:
@@ -1428,8 +1478,12 @@ class AnchorageCheckbookPlugin(MCPPlugin):
 
     @staticmethod
     def _table_cell(value: Any) -> str:
+        # NULL renders as '--', matching _fmt_money, rather than as a
+        # blank cell indistinguishable from an empty string. On this
+        # dataset the difference matters: a blank Vendor_Name is a
+        # journal entry, not a vendor whose name is missing.
         if value is None:
-            return ""
+            return "--"
         return str(value).replace("|", "\\|")
 
     def _render_value(self, table_id: int, key: str, value: Any) -> Any:
@@ -1474,6 +1528,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         args: Optional[Dict[str, Any]] = None,
         offset: Optional[int] = None,
         pubdate: Optional[str] = None,
+        no_match_note: Optional[str] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Assemble a row-listing response.
 
@@ -1517,7 +1572,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         if banner or notices:
             lines.append("")
         if not records:
-            lines.append("No rows matched.")
+            lines.append(no_match_note or "No rows matched.")
         else:
             if total_count is not None:
                 lines.append(
@@ -1894,6 +1949,52 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             if period_caveat:
                 caveats.append(period_caveat)
 
+        # Grouping by the payee field ranks the NULL bucket alongside real
+        # vendors. On table 0 that bucket is ~54k rows of journal entries
+        # and transfers and it outweighs every actual vendor, so ungated
+        # it reads as "the largest vendor in Anchorage". top_vendors
+        # excludes it; spending_stats must not silently drop the money, so
+        # it labels it instead.
+        entity_grouped = bool(info.entity_field and info.entity_field in groups)
+        if entity_grouped:
+            if any(r.get(info.entity_field) is None for r in rows):
+                caveats.append(
+                    self._caveat(
+                        CAVEAT_NULL_PAYEE_GROUP,
+                        f"One group has a NULL {info.entity_field}: those "
+                        f"rows are journal entries, fund transfers and "
+                        f"accounting lines, NOT a payee. It is labelled "
+                        f"{NULL_PAYEE_LABEL!r} below and must never be "
+                        f"reported as a vendor. Use top_vendors for a "
+                        f"ranking that excludes it.",
+                    )
+                )
+            caveats.append(
+                self._caveat(
+                    CAVEAT_VENDOR_SPELLING_VARIANTS,
+                    f"{VENDOR_NORMALIZATION_NOTE} These groups are "
+                    f"SPELLINGS, not entities: {len(rows)} group(s) here "
+                    f"is a spelling count. Use search_by_vendor to gather "
+                    f"every spelling of one payee.",
+                    count=len(rows),
+                )
+            )
+
+        # A filter that matched nothing must never render as a figure.
+        matched = sum((r.get("row_count") or 0) for r in rows)
+        if matched == 0:
+            caveats.insert(
+                0,
+                self._caveat(
+                    CAVEAT_NO_ROWS_MATCHED,
+                    f"**NO ROWS MATCHED:** this filter selected 0 rows, so "
+                    f"the figure below is not a total of anything -- it is "
+                    f"ABSENT DATA, not $0. "
+                    f"{self._no_match_diagnostic(info, args)}",
+                    count=0,
+                ),
+            )
+
         lines = [heading, ""]
         lines.extend(self._caveat_messages(caveats))
         lines.append("")
@@ -1905,18 +2006,31 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             for row in rows:
                 rec: Dict[str, Any] = {}
                 for g in groups:
-                    rec[g] = row.get(g)
+                    value = row.get(g)
+                    if value is None and g == info.entity_field:
+                        value = NULL_PAYEE_LABEL
+                    rec[g] = value
                 value = row.get(out_name)
                 rec[f"net_{stat_label}_{measure}" if money_stat else out_name] = (
                     self._fmt_money(value) if money_stat else value
                 )
-                rec["rows"] = row.get("row_count")
+                # Named for its grain: these are LINE ITEMS, not distinct
+                # vendors, transactions or entities.
+                rec["line_items"] = row.get("row_count")
                 display.append(rec)
             display = self._expand_code_labels(display, info)
             lines.extend(self._format_table(display, info.id))
             if groups:
                 lines.append("")
-                group_note = f"({len(rows)} group(s), ordered by {order}."
+                grain = (
+                    "spelling(s) of the payee field"
+                    if entity_grouped
+                    else "group(s)"
+                )
+                group_note = (
+                    f"({len(rows)} {grain}, {matched:,} line item(s), "
+                    f"ordered by {order}."
+                )
                 if len(rows) >= limit:
                     group_note += (
                         f" The group list may be truncated at "
@@ -2056,12 +2170,20 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         combined_net = sum(r.get("net_total") or 0 for r in rows) if rows else None
         combined_rows = sum(r.get("row_count") or 0 for r in rows) if rows else None
         if not rows:
-            lines.append(
-                f"No {entity} values contain `{name}`. The match is a "
-                f"case-insensitive substring; try a shorter fragment. "
-                f"NULL-payee rows (journal entries, transfers) are "
-                f"always excluded."
+            miss = (
+                f"**NO SPELLING MATCHED:** no {entity} value contains "
+                f"`{name}`. That is ABSENT DATA, not a finding that the "
+                f"payee received nothing -- spellings are unnormalized, so "
+                f"the entity may exist under a different one. The match is "
+                f"a case-insensitive substring; try a SHORTER fragment. "
+                f"NULL-payee rows (journal entries, transfers) are always "
+                f"excluded."
             )
+            caveats.insert(
+                0, self._caveat(CAVEAT_NO_ROWS_MATCHED, miss, count=0)
+            )
+            lines = lines[:2] + self._caveat_messages(caveats) + [""]
+            lines.append(miss)
         else:
             summary = (
                 f"{len(rows)} distinct spelling(s); combined net total "
@@ -2232,7 +2354,16 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         lines.extend(self._caveat_messages(caveats))
         lines.append("")
         if not rows:
-            lines.append("No matching rows.")
+            miss = (
+                f"**NO ROWS MATCHED:** no payee rows matched this filter. "
+                f"That is ABSENT DATA, not a finding of zero spending. "
+                f"{self._no_match_diagnostic(info, args)}"
+            )
+            caveats.insert(
+                0, self._caveat(CAVEAT_NO_ROWS_MATCHED, miss, count=0)
+            )
+            lines = lines[:2] + self._caveat_messages(caveats) + [""]
+            lines.append(miss)
         else:
             display = [
                 {
@@ -2323,6 +2454,18 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE)
             )
 
+        if total == 0:
+            caveats.insert(
+                0,
+                self._caveat(
+                    CAVEAT_NO_ROWS_MATCHED,
+                    f"**NO ROWS MATCHED:** this filter selected 0 rows. "
+                    f"That is ABSENT DATA, not a finding of zero. "
+                    f"{self._no_match_diagnostic(info, args)}",
+                    count=0,
+                ),
+            )
+
         text, structured = self._format_rows_response(
             info,
             records,
@@ -2335,6 +2478,11 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 + (f", offset {offset}" if offset else "")
             ),
             caveats=caveats,
+            no_match_note=(
+                caveats[0]["message"]
+                if caveats and caveats[0]["code"] == CAVEAT_NO_ROWS_MATCHED
+                else None
+            ),
             dedup_caveat=dedup_caveat,
             args=args,
             offset=offset,
@@ -2534,6 +2682,18 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE)
             )
 
+        if total == 0:
+            caveats.insert(
+                0,
+                self._caveat(
+                    CAVEAT_NO_ROWS_MATCHED,
+                    f"**NO ROWS MATCHED:** this filter selected 0 rows. "
+                    f"That is ABSENT DATA, not a finding of zero. "
+                    f"{self._no_match_diagnostic(info, args)}",
+                    count=0,
+                ),
+            )
+
         text, structured = self._format_rows_response(
             info,
             records,
@@ -2543,6 +2703,11 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             total_count=total,
             heading=f"## query_checkbook -- table {info.id} ({info.label})",
             caveats=caveats,
+            no_match_note=(
+                caveats[0]["message"]
+                if caveats and caveats[0]["code"] == CAVEAT_NO_ROWS_MATCHED
+                else None
+            ),
             dedup_caveat=dedup_caveat,
             args=args,
             offset=offset,
@@ -2600,7 +2765,8 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             "Codes: NET_OF_OFFSETS, DUPLICATES_FILTERED, "
             "DUPLICATES_INCLUDED, ADJUSTMENT_PERIOD, "
             "VENDOR_SPELLING_VARIANTS, KNOWN_GAP, LOCATION_IS_BILLING, "
-            "PERIOD_SCALE, TABLE_EMPTY, REFUNDS_LABEL, TRUNCATED."
+            "PERIOD_SCALE, TABLE_EMPTY, REFUNDS_LABEL, TRUNCATED, "
+            "NO_ROWS_MATCHED, NULL_PAYEE_GROUP."
         ),
         "items": {
             "type": "object",
