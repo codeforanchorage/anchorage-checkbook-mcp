@@ -80,15 +80,6 @@ plugins:
     # far above anything legitimate.
     timeout: 20
 
-  anchorage_parcels:
-    enabled: false
-    property_layer_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/PropertyInformation_Hosted/FeatureServer/0"
-    addresses_layer_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/Addresses_Hosted/FeatureServer/0"
-    subdivisions_layer_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/Subdivisions_Hosted/FeatureServer/0"
-    city_name: "Municipality of Anchorage"
-    field_map: {}
-    timeout: 30
-
   ckan:
     enabled: false
     base_url: "https://data.example.gov/"
