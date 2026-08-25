@@ -35,7 +35,13 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import httpx
 
-from core.interfaces import MCPPlugin, PluginType, ToolDefinition, ToolResult
+from core.interfaces import (
+    MCPPlugin,
+    PluginType,
+    ToolDefinition,
+    ToolInputError,
+    ToolResult,
+)
 from plugins.anchorage_checkbook.config_schema import AnchorageCheckbookPluginConfig
 from plugins.anchorage_checkbook.where_validator import (
     CheckbookWhereValidator,
@@ -559,7 +565,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         info = TABLES.get(tid)
         if info is None:
             options = "; ".join(f"{i.id}={i.name} ({i.label})" for i in TABLES.values())
-            raise ValueError(
+            raise ToolInputError(
                 f"table must be one of 0-5 (got {table_id!r}). "
                 f"Tables: {options}. Call list_tables for details."
             )
@@ -597,7 +603,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         on it either matches everything or nothing.
         """
         if clause and re.search(rf"\b{PUBDATE_FIELD}\b", clause, re.IGNORECASE):
-            raise ValueError(
+            raise ToolInputError(
                 f"Filtering on {PUBDATE_FIELD} is not supported: it is "
                 f"the ETL snapshot stamp -- one identical value on every "
                 f"row saying when the data was last published, NOT when "
@@ -693,7 +699,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 for i in TABLES.values()
                 if i.entity_field
             )
-            raise ValueError(
+            raise ToolInputError(
                 f"Table {info.id} ({info.name}) has no vendor/payee "
                 f"field. Tables with one: {with_entity}."
             )
@@ -709,12 +715,44 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         return f"{self._require_entity_field(info)} IS NOT NULL"
 
     @staticmethod
+    def _int_arg(args: Dict[str, Any], name: str, default: Any = None) -> int:
+        """Coerce a caller-supplied argument to int, or explain why not.
+
+        A bare int() raises "invalid literal for int() with base 10:
+        'FY25'" -- which reads as a server fault in the logs and tells the
+        caller nothing about which argument was wrong. An explicit null is
+        treated as "not supplied", the same as omitting the key.
+        """
+        raw = args.get(name, default)
+        if raw is None:
+            raw = default
+        try:
+            return int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ToolInputError(
+                f"{name} must be an integer (got {raw!r})"
+            ) from exc
+
+    @staticmethod
+    def _float_arg(args: Dict[str, Any], name: str, default: Any = None) -> float:
+        """Coerce a caller-supplied argument to float, or explain why not."""
+        raw = args.get(name, default)
+        if raw is None:
+            raw = default
+        try:
+            return float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ToolInputError(
+                f"{name} must be a number (got {raw!r})"
+            ) from exc
+
+    @staticmethod
     def _validate_fiscal_year(value: Any) -> str:
         """Fiscal_Year is a STRING field upstream; accept int or str
         input and return the quoted-literal-ready 4-digit string."""
         text = str(value).strip()
         if not re.fullmatch(r"\d{4}", text):
-            raise ValueError(
+            raise ToolInputError(
                 f"fiscal_year must be a 4-digit year (got {value!r}), "
                 f"e.g. 2023. Years present vary by table -- call "
                 f"list_tables for per-table coverage."
@@ -727,11 +765,11 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         try:
             period = int(value)
         except (TypeError, ValueError):
-            raise ValueError(
+            raise ToolInputError(
                 f"fiscal_period must be an integer 1-16 (got {value!r}). {PERIOD_NOTE}"
             )
         if not 1 <= period <= 16:
-            raise ValueError(
+            raise ToolInputError(
                 f"fiscal_period must be 1-16 (got {period}). {PERIOD_NOTE}"
             )
         return period
@@ -773,7 +811,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         """Reject a structured filter that names a field this table
         lacks (e.g. fund on the payroll rollup)."""
         if field_name not in self._fields_for(info.id):
-            raise ValueError(
+            raise ToolInputError(
                 f"{arg_name} does not apply to table {info.id} "
                 f"({info.name}): it has no {field_name} field. Fields "
                 f"on this table: {', '.join(info.all_fields)}."
@@ -786,7 +824,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         schema, with a difflib suggestion on a miss."""
         field_name = (field_name or "").strip()
         if not _IDENT_RE.match(field_name):
-            raise ValueError(
+            raise ToolInputError(
                 f"{arg_name} must be a single field name "
                 f"(got {field_name!r}). {CASE_SENSITIVE_NOTE}"
             )
@@ -796,7 +834,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 field_name, sorted(known), n=1, cutoff=0.6
             )
             hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
-            raise ValueError(
+            raise ToolInputError(
                 f"{arg_name} {field_name!r} is not a field on table "
                 f"{info.id} ({info.name}).{hint} Fields: "
                 f"{', '.join(sorted(known))}. {CASE_SENSITIVE_NOTE}"
@@ -1121,11 +1159,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         provenance footer, which echoes 'limit=N (requested M,
         clamped)' -- the eBird pattern.
         """
-        raw = args.get("limit", default)
-        try:
-            requested = int(default if raw is None else raw)
-        except (TypeError, ValueError):
-            raise ValueError(f"limit must be an integer (got {raw!r})")
+        requested = self._int_arg(args, "limit", default)
         return max(1, min(requested, maximum)), requested
 
     @staticmethod
@@ -1478,7 +1512,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             return [g.strip() for g in raw.split(",") if g.strip()]
         if isinstance(raw, (list, tuple)):
             return [str(g).strip() for g in raw if str(g).strip()]
-        raise ValueError(
+        raise ToolInputError(
             f"group_by must be a field name or a list of field names (got {raw!r})"
         )
 
@@ -1486,7 +1520,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         info = self._table_info(args.get("table"))
         measure = str(args.get("measure") or info.default_measure or "").strip()
         if measure not in info.measure_fields:
-            raise ValueError(
+            raise ToolInputError(
                 f"measure must be one of {list(info.measure_fields)} for "
                 f"table {info.id} ({info.name}), got {measure!r}. There "
                 f"is no universal 'Amount' field -- table 2's measures "
@@ -1495,7 +1529,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             )
         stat_type = str(args.get("stat_type") or "sum").strip().lower()
         if stat_type not in self.STAT_TYPES:
-            raise ValueError(
+            raise ToolInputError(
                 f"stat_type must be one of {list(self.STAT_TYPES)} "
                 f"(got {stat_type!r}). Median = percentile_cont with "
                 f"percentile=0.5."
@@ -1518,9 +1552,9 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         }
         percentile = None
         if stat_type == "percentile_cont":
-            percentile = float(args.get("percentile", 0.5))
+            percentile = self._float_arg(args, "percentile", 0.5)
             if not (0.0 <= percentile <= 1.0):
-                raise ValueError(
+                raise ToolInputError(
                     f"percentile must be between 0 and 1 "
                     f"(got {percentile}); 0.5 is the median"
                 )
@@ -1537,7 +1571,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         limit, requested = self._clamp_limit(args, default=50, maximum=self.MAX_GROUPS)
         order = str(args.get("order") or "").strip().lower()
         if order not in ("", "group", "value"):
-            raise ValueError(f"order must be 'group' or 'value' (got {order!r})")
+            raise ToolInputError(f"order must be 'group' or 'value' (got {order!r})")
         if not order:
             # Time-series groupings read chronologically; everything
             # else ranks by the statistic.
@@ -1665,7 +1699,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
     async def _search_by_vendor(self, args: Dict[str, Any]) -> str:
         name = str(args.get("name_contains") or "").strip()
         if not name:
-            raise ValueError("name_contains is required")
+            raise ToolInputError("name_contains is required")
         info = self._table_info(args.get("table", 0))
         entity = self._require_entity_field(info)
         measure = info.default_measure
@@ -1749,11 +1783,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         info = self._table_info(args.get("table", 0))
         entity = self._require_entity_field(info)
         measure = info.default_measure
-        raw_n = args.get("n", 20)
-        try:
-            requested = int(raw_n)
-        except (TypeError, ValueError):
-            raise ValueError(f"n must be an integer (got {raw_n!r})")
+        requested = self._int_arg(args, "n", 20)
         n = max(1, min(requested, 100))
 
         dedup_clause, dup_warning = self._dedup_parts(args)
@@ -1827,7 +1857,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         clauses, years = self._structured_where(info, args)
         where = self._combine_where(dedup_clause, *clauses)
         limit, requested = self._clamp_limit(args, default=100, maximum=self.MAX_ROWS)
-        offset = max(0, int(args.get("offset", 0)))
+        offset = max(0, self._int_arg(args, "offset", 0))
         order_by = self._validate_order_by(info, args.get("order_by"))
         out_fields = self._validate_out_fields(
             info, args.get("out_fields"), include_dup
@@ -1884,7 +1914,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             info, str(args.get("field") or ""), "field"
         )
         if field_name in info.measure_fields:
-            raise ValueError(
+            raise ToolInputError(
                 f"{field_name} is a continuous dollar measure -- listing "
                 f"its distinct values is not meaningful. Use "
                 f"spending_stats (sum/avg/min/max/percentile_cont) "
@@ -1893,7 +1923,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         if field_name == PUBDATE_FIELD:
             self._reject_pubdate_filter(field_name)
         if field_name == "OBJECTID":
-            raise ValueError("OBJECTID is an internal row id; nothing to list.")
+            raise ToolInputError("OBJECTID is an internal row id; nothing to list.")
 
         limit, requested = self._clamp_limit(args, default=100, maximum=1000)
         dedup_clause, dup_warning = self._dedup_parts(args)
@@ -1971,7 +2001,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         info = self._table_info(args.get("table"))
         raw_where = str(args.get("where") or "").strip()
         if not raw_where:
-            raise ValueError(
+            raise ToolInputError(
                 "where is required ('1=1' matches everything). Prefer "
                 "the structured tools (spending_stats, get_line_items) "
                 "when they can express your filter."
@@ -1981,7 +2011,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         dedup_clause, dup_warning = self._dedup_parts(args)
         where = self._combine_where(dedup_clause, user_where)
         limit, requested = self._clamp_limit(args, default=200, maximum=self.MAX_ROWS)
-        offset = max(0, int(args.get("offset", 0)))
+        offset = max(0, self._int_arg(args, "offset", 0))
         order_by = self._validate_order_by(info, args.get("order_by"))
         out_fields = self._validate_out_fields(
             info, args.get("out_fields"), include_dup
@@ -2487,6 +2517,21 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 content=[{"type": "text", "text": self._with_retrieved_footer(text)}],
                 success=True,
             )
+        except ToolInputError as e:
+            # The caller asked for something invalid. That is not a
+            # server fault, so no traceback -- a stack trace here is a
+            # false claim that this server broke, and it buries the real
+            # ones. The message still reaches the caller verbatim.
+            logger.warning(
+                f"Invalid arguments for tool {tool_name}: {e}",
+                extra={"tool_name": tool_name, "error_type": type(e).__name__},
+            )
+            return ToolResult(
+                content=[],
+                success=False,
+                error_message=str(e) if str(e) else "Invalid tool arguments",
+            )
+
         except Exception as e:
             logger.error(f"Error executing tool {tool_name}: {e}", exc_info=True)
             return ToolResult(

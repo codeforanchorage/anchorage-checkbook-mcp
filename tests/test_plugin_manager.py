@@ -9,7 +9,13 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from core.plugin_manager import PluginManager
-from core.interfaces import MCPPlugin, ToolDefinition, ToolResult, PluginType
+from core.interfaces import (
+    MCPPlugin,
+    PluginType,
+    ToolDefinition,
+    ToolResult,
+    UnknownToolError,
+)
 from core.validators import ConfigurationError
 
 
@@ -370,7 +376,12 @@ class TestToolExecution:
 
     @pytest.mark.asyncio
     async def test_execute_tool_fails_with_nonexistent_tool(self):
-        """Test that executing nonexistent tool raises ValueError."""
+        """Unknown tools raise UnknownToolError -- still a ValueError.
+
+        Subclassing ValueError is deliberate, so every existing
+        `except ValueError` around execute_tool keeps working; this test
+        asserts both halves of that contract.
+        """
         config = {
             "plugins": {
                 "ckan": {"enabled": True, "base_url": "https://data.example.com"}
@@ -394,7 +405,9 @@ class TestToolExecution:
             with pytest.raises(ValueError) as exc_info:
                 await manager.execute_tool("ckan__nonexistent", {})
 
-            assert "not found" in str(exc_info.value).lower()
+            assert isinstance(exc_info.value, UnknownToolError)
+            # The message shape the MCP tools spec's own example uses.
+            assert str(exc_info.value) == "Unknown tool: ckan__nonexistent"
 
     @pytest.mark.asyncio
     async def test_execute_tool_fails_when_not_initialized(self):

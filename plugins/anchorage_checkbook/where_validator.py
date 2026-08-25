@@ -15,11 +15,18 @@ string-literal contents, so quoted data values can never trip the scan
 and bare tokens that are legal in names never match. Structured-param
 tools bypass this entirely -- the server composes their WHERE clauses
 itself with proper escaping.
+
+Every rejection in this module is CALLER input by construction: a WHERE
+clause, an out_fields list and an order_by list all arrive from the tool
+call and nowhere else. They therefore raise ToolInputError, so a rejected
+clause logs as a warning rather than as a server fault with a traceback.
 """
 
 import difflib
 import re
 from typing import Iterable, Optional
+
+from core.interfaces import ToolInputError
 
 
 class CheckbookWhereValidator:
@@ -86,7 +93,7 @@ class CheckbookWhereValidator:
             else:
                 i += 1  # mask literal content
         if in_str:
-            raise ValueError("Unbalanced quote in WHERE clause")
+            raise ToolInputError("Unbalanced quote in WHERE clause")
         return "".join(out)
 
     @classmethod
@@ -106,7 +113,7 @@ class CheckbookWhereValidator:
             return "1=1"
 
         if len(where) > cls.MAX_LENGTH:
-            raise ValueError(
+            raise ToolInputError(
                 f"WHERE clause exceeds max length ({cls.MAX_LENGTH} chars)"
             )
 
@@ -115,14 +122,14 @@ class CheckbookWhereValidator:
         lowered = masked.lower()
         for bad in cls.FORBIDDEN_SUBSTRINGS:
             if bad in lowered:
-                raise ValueError(
+                raise ToolInputError(
                     f"Forbidden substring {bad!r} detected in WHERE "
                     f"clause (outside string literals)"
                 )
 
         for pattern, shape in cls.INJECTION_SHAPES:
             if re.search(pattern, masked, re.IGNORECASE):
-                raise ValueError(
+                raise ToolInputError(
                     f"SQL statement shape '{shape}' detected in WHERE "
                     f"clause. Only filter expressions are allowed. Note "
                     f"that data VALUES containing SQL-looking words are "
@@ -255,7 +262,7 @@ class CheckbookWhereValidator:
             else:
                 parts.append(f"Field {u!r} not found in this table.")
         parts.append(schema_hint)
-        raise ValueError(" ".join(parts))
+        raise ToolInputError(" ".join(parts))
 
 
 class OutFieldsValidator:
@@ -279,10 +286,10 @@ class OutFieldsValidator:
 
         parts = [p.strip() for p in value.split(",")]
         if len(parts) > cls.MAX_FIELDS:
-            raise ValueError(f"out_fields exceeds max of {cls.MAX_FIELDS} fields")
+            raise ToolInputError(f"out_fields exceeds max of {cls.MAX_FIELDS} fields")
         for part in parts:
             if not cls._IDENT.match(part):
-                raise ValueError(f"Invalid field name in out_fields: {part!r}")
+                raise ToolInputError(f"Invalid field name in out_fields: {part!r}")
         return ",".join(parts)
 
 
@@ -306,8 +313,8 @@ class OrderByValidator:
 
         parts = [p.strip() for p in value.split(",")]
         if len(parts) > cls.MAX_FIELDS:
-            raise ValueError(f"order_by exceeds max of {cls.MAX_FIELDS} fields")
+            raise ToolInputError(f"order_by exceeds max of {cls.MAX_FIELDS} fields")
         for part in parts:
             if not cls._ENTRY.match(part):
-                raise ValueError(f"Invalid order_by entry: {part!r}")
+                raise ToolInputError(f"Invalid order_by entry: {part!r}")
         return ",".join(parts)
