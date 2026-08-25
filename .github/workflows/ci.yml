@@ -9,12 +9,10 @@
 # Each job below is one that was verified to pass on the tree that
 # introduced it, so this arrives green rather than red.
 #
-# DELIBERATELY ABSENT: `ruff format --check`. This repo is hand-wrapped at
-# roughly 79 columns and the formatter disagrees with 15 existing files;
-# enforcing it would demand a thousand-line reformat that would bury real
-# diffs in whitespace and destroy `git blame` across the plugin. `ruff
-# check` (the linter) IS enforced. If you are tempted to add the formatter,
-# that reformat is the thing to weigh -- not the one-line workflow change.
+# DELIBERATELY ABSENT: `terraform validate`. It requires `terraform init`
+# against the S3 backend, and CI holds no AWS credentials by design --
+# nothing reachable from a pull request should be able to read or touch
+# deployment state. `terraform fmt` needs neither and is enforced below.
 
 name: CI
 
@@ -66,6 +64,14 @@ jobs:
 
       - name: ruff check
         run: ruff check core/ plugins/ server/ tests/
+
+      # The formatter, enforced as of the reformat in the preceding commit.
+      # .pre-commit-config.yaml has run the ruff-format hook all along, so
+      # this closes the gap where a contributor without the hook installed
+      # could push formatting CI never checked. Line length is ruff's
+      # default 88, not pinned to 79 -- see that commit for the comparison.
+      - name: ruff format --check
+        run: ruff format --check core/ plugins/ server/ tests/
 
   test:
     name: pytest
