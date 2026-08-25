@@ -52,10 +52,15 @@ python3 scripts/local_server.py
 ```
 
 **What it does:**
-- Starts a local HTTP server on `http://localhost:8000/mcp`
+- Starts a local HTTP server on `http://localhost:8000/mcp` (and `/mcp-gcc`)
 - Supports Streamable HTTP transport with session management
-- Provides detailed logging for debugging
-- Uses the same MCP server logic as Lambda deployment
+- Provides detailed logging for debugging, including tool names and arguments
+- Routes every request through `UniversalHTTPHandler` — the *same* handler
+  `server/adapters/aws_lambda.py` uses — so the Origin allowlist, the
+  MCP-Protocol-Version check, path/method validation and CORS all behave
+  locally exactly as they do in production. It is the only local entry
+  point; a second copy at the repo root used to bypass the handler and has
+  been removed.
 
 **Requirements:**
 - Python 3.11+
