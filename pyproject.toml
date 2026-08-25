@@ -28,7 +28,13 @@ dev = [
     # return conforming structured results -- so the tests validate real
     # tool output against the real schema rather than eyeballing shapes.
     "jsonschema>=4.0.0",
-    "ruff>=0.1.0",
+    # PINNED, not floating. `ruff>=0.1.0` let CI resolve to whatever ruff
+    # released most recently, which enabled rules this tree has never been
+    # checked against -- the first CI run reported 957 findings (mostly
+    # RUF059) on code that is clean locally. Keep this equal to the rev in
+    # .pre-commit-config.yaml so a contributor's hook, a local run and CI
+    # all reach the same verdict. Bump both together, deliberately.
+    "ruff==0.15.11",
     "pip-audit>=2.0.0",
 ]
 

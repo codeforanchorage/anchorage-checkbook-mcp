@@ -56,6 +56,14 @@ jobs:
       # Scoped to the same four directories as .pre-commit-config.yaml.
       # scripts/ is deliberately outside it: those entry points must set
       # sys.path before importing from core/, which is an unavoidable E402.
+      # The version is PINNED in pyproject.toml [dev], not floating. A
+      # floating `ruff>=0.1.0` resolved to a newer release on the first run
+      # here and reported 957 findings against rules this tree had never
+      # been checked with. Keep the pin equal to the rev in
+      # .pre-commit-config.yaml so hook, local and CI agree.
+      - name: ruff version (pinned; must match .pre-commit-config.yaml)
+        run: ruff --version
+
       - name: ruff check
         run: ruff check core/ plugins/ server/ tests/
 
