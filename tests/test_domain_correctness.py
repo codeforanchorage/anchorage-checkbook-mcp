@@ -34,7 +34,7 @@ def codes(structured):
 
 
 class TestFalseZeros:
-    """"Not recorded that way" must never render as a finding of zero.
+    """ "Not recorded that way" must never render as a finding of zero.
 
     Reproduced live before the fix: spending_stats(table=0,
     fiscal_year=2011) returned a table reading `-- | 0` with no
@@ -43,9 +43,7 @@ class TestFalseZeros:
     """
 
     async def _stats(self, plugin, args, rows):
-        with patch.object(
-            plugin, "_query_statistics", AsyncMock(return_value=rows)
-        ):
+        with patch.object(plugin, "_query_statistics", AsyncMock(return_value=rows)):
             return await plugin._spending_stats(args)
 
     @pytest.mark.asyncio
@@ -107,9 +105,7 @@ class TestFalseZeros:
 
     @pytest.mark.asyncio
     async def test_vendor_search_miss_is_not_a_finding_of_zero(self, plugin):
-        with patch.object(
-            plugin, "_query_statistics", AsyncMock(return_value=[])
-        ):
+        with patch.object(plugin, "_query_statistics", AsyncMock(return_value=[])):
             text, structured = await plugin._search_by_vendor(
                 {"name_contains": "zzzznotavendor"}
             )
@@ -119,9 +115,7 @@ class TestFalseZeros:
 
     @pytest.mark.asyncio
     async def test_top_vendors_miss_is_not_a_finding_of_zero(self, plugin):
-        with patch.object(
-            plugin, "_query_statistics", AsyncMock(return_value=[])
-        ):
+        with patch.object(plugin, "_query_statistics", AsyncMock(return_value=[])):
             text, structured = await plugin._top_vendors(
                 {"table": 0, "fiscal_year": 2011}
             )
@@ -137,9 +131,7 @@ class TestNullPayeeIsNotAVendor:
     """
 
     async def _grouped(self, plugin, rows):
-        with patch.object(
-            plugin, "_query_statistics", AsyncMock(return_value=rows)
-        ):
+        with patch.object(plugin, "_query_statistics", AsyncMock(return_value=rows)):
             return await plugin._spending_stats(
                 {"table": 0, "group_by": ["Vendor_Name"], "fiscal_year": 2025}
             )
@@ -213,8 +205,16 @@ class TestCountingGrain:
             "_query_statistics",
             AsyncMock(
                 return_value=[
-                    {"Vendor_Name": "TLO TRANSUNION", "sum_Amount": 4092.0, "row_count": 10},
-                    {"Vendor_Name": "TRANSUNION SHAREAB", "sum_Amount": 550.0, "row_count": 16},
+                    {
+                        "Vendor_Name": "TLO TRANSUNION",
+                        "sum_Amount": 4092.0,
+                        "row_count": 10,
+                    },
+                    {
+                        "Vendor_Name": "TRANSUNION SHAREAB",
+                        "sum_Amount": 550.0,
+                        "row_count": 16,
+                    },
                 ]
             ),
         ):
@@ -281,7 +281,9 @@ class TestQualificationsTravelWithTheNumber:
 
         assert "KNOWN_GAP" in codes(structured)
         outlier = next(
-            c for c in structured["caveats"] if c.get("gap") == "procurement_fy2025_outlier"
+            c
+            for c in structured["caveats"]
+            if c.get("gap") == "procurement_fy2025_outlier"
         )
         # Stated BEFORE the figures it qualifies.
         assert text.index(outlier["message"]) < text.index("Manson")

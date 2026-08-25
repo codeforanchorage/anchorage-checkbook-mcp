@@ -760,9 +760,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         # pinned to one other year doesn't need the warning.
         if info.id == 4 and (touched is None or "2024" in touched or len(touched) > 1):
             notes.append(
-                cls._caveat(
-                    CAVEAT_KNOWN_GAP, REVENUE_FY2024_NOTE, gap="revenue_fy2024"
-                )
+                cls._caveat(CAVEAT_KNOWN_GAP, REVENUE_FY2024_NOTE, gap="revenue_fy2024")
             )
         if info.id == 3 and touches("2025"):
             notes.append(
@@ -774,9 +772,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             )
         if touches("2026"):
             notes.append(
-                cls._caveat(
-                    CAVEAT_KNOWN_GAP, FY2026_PARTIAL_NOTE, gap="fy2026_partial"
-                )
+                cls._caveat(CAVEAT_KNOWN_GAP, FY2026_PARTIAL_NOTE, gap="fy2026_partial")
             )
         return notes
 
@@ -905,9 +901,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         try:
             return int(raw)
         except (TypeError, ValueError) as exc:
-            raise ToolInputError(
-                f"{name} must be an integer (got {raw!r})"
-            ) from exc
+            raise ToolInputError(f"{name} must be an integer (got {raw!r})") from exc
 
     @staticmethod
     def _float_arg(args: Dict[str, Any], name: str, default: Any = None) -> float:
@@ -918,9 +912,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         try:
             return float(raw)
         except (TypeError, ValueError) as exc:
-            raise ToolInputError(
-                f"{name} must be a number (got {raw!r})"
-            ) from exc
+            raise ToolInputError(f"{name} must be a number (got {raw!r})") from exc
 
     @staticmethod
     def _validate_fiscal_year(value: Any) -> str:
@@ -1562,9 +1554,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             # a sample.
             caveats.insert(
                 0,
-                self._caveat(
-                    CAVEAT_TRUNCATED, banner, count=total_count, limit=limit
-                ),
+                self._caveat(CAVEAT_TRUNCATED, banner, count=total_count, limit=limit),
             )
             lines.append(banner)
         if notices:
@@ -1827,9 +1817,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             f"group_by must be a field name or a list of field names (got {raw!r})"
         )
 
-    async def _spending_stats(
-        self, args: Dict[str, Any]
-    ) -> Tuple[str, Dict[str, Any]]:
+    async def _spending_stats(self, args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         info = self._table_info(args.get("table"))
         measure = str(args.get("measure") or info.default_measure or "").strip()
         if measure not in info.measure_fields:
@@ -2023,9 +2011,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             if groups:
                 lines.append("")
                 grain = (
-                    "spelling(s) of the payee field"
-                    if entity_grouped
-                    else "group(s)"
+                    "spelling(s) of the payee field" if entity_grouped else "group(s)"
                 )
                 group_note = (
                     f"({len(rows)} {grain}, {matched:,} line item(s), "
@@ -2077,8 +2063,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             "rows": [
                 {
                     "group": {
-                        g: self._render_value(info.id, g, row.get(g))
-                        for g in groups
+                        g: self._render_value(info.id, g, row.get(g)) for g in groups
                     },
                     "value": row.get(out_name),
                     "row_count": row.get("row_count"),
@@ -2179,9 +2164,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 f"NULL-payee rows (journal entries, transfers) are always "
                 f"excluded."
             )
-            caveats.insert(
-                0, self._caveat(CAVEAT_NO_ROWS_MATCHED, miss, count=0)
-            )
+            caveats.insert(0, self._caveat(CAVEAT_NO_ROWS_MATCHED, miss, count=0))
             lines = lines[:2] + self._caveat_messages(caveats) + [""]
             lines.append(miss)
         else:
@@ -2296,9 +2279,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
 
     # ── Tool: top_vendors ─────────────────────────────────────────────
 
-    async def _top_vendors(
-        self, args: Dict[str, Any]
-    ) -> Tuple[str, Dict[str, Any]]:
+    async def _top_vendors(self, args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         info = self._table_info(args.get("table", 0))
         entity = self._require_entity_field(info)
         measure = info.default_measure
@@ -2359,9 +2340,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 f"That is ABSENT DATA, not a finding of zero spending. "
                 f"{self._no_match_diagnostic(info, args)}"
             )
-            caveats.insert(
-                0, self._caveat(CAVEAT_NO_ROWS_MATCHED, miss, count=0)
-            )
+            caveats.insert(0, self._caveat(CAVEAT_NO_ROWS_MATCHED, miss, count=0))
             lines = lines[:2] + self._caveat_messages(caveats) + [""]
             lines.append(miss)
         else:
@@ -2399,9 +2378,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             args=args,
             limit=n,
             pubdate=pubdate,
-            combined_net=(
-                sum(r.get("net_total") or 0 for r in rows) if rows else None
-            ),
+            combined_net=(sum(r.get("net_total") or 0 for r in rows) if rows else None),
             combined_rows=(
                 sum(r.get("row_count") or 0 for r in rows) if rows else None
             ),
@@ -2411,9 +2388,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
 
     # ── Tool: get_line_items ──────────────────────────────────────────
 
-    async def _get_line_items(
-        self, args: Dict[str, Any]
-    ) -> Tuple[str, Dict[str, Any]]:
+    async def _get_line_items(self, args: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         info = self._table_info(args.get("table"))
         include_dup = bool(args.get("include_duplicates", False))
         dedup_clause, dedup_caveat = self._dedup_parts(args)
@@ -2450,9 +2425,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 )
             )
         if "Location" in self._default_out_fields(info, include_dup):
-            caveats.append(
-                self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE)
-            )
+            caveats.append(self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE))
 
         if total == 0:
             caveats.insert(
@@ -2534,9 +2507,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             if period_caveat:
                 caveats.append(period_caveat)
         if field_name == "Location":
-            caveats.append(
-                self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE)
-            )
+            caveats.append(self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE))
         if field_name == info.entity_field:
             caveats.append(
                 self._caveat(
@@ -2678,9 +2649,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 )
             )
         if "Location" in self._default_out_fields(info, include_dup):
-            caveats.append(
-                self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE)
-            )
+            caveats.append(self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE))
 
         if total == 0:
             caveats.insert(
@@ -3199,9 +3168,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 "items": {
                     "type": "object",
                     "properties": {
-                        "value": {
-                            "type": ["string", "number", "boolean", "null"]
-                        },
+                        "value": {"type": ["string", "number", "boolean", "null"]},
                         "code": {"type": ["string", "null"]},
                         "label": {"type": ["string", "null"]},
                         "is_adjustment_period": {

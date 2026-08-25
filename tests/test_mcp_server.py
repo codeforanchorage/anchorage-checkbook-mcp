@@ -672,8 +672,7 @@ class TestProtocolVersionNegotiation:
         )
 
         assert (
-            response["result"]["protocolVersion"]
-            == MCPServer.DEFAULT_PROTOCOL_VERSION
+            response["result"]["protocolVersion"] == MCPServer.DEFAULT_PROTOCOL_VERSION
         )
 
 
@@ -733,7 +732,9 @@ class TestCallerErrorCodes:
             plugin_manager.execute_tool = AsyncMock(side_effect=execute_side_effect)
         else:
             plugin_manager.execute_tool = AsyncMock(
-                return_value=ToolResult(content=[{"type": "text", "text": "ok"}], success=True)
+                return_value=ToolResult(
+                    content=[{"type": "text", "text": "ok"}], success=True
+                )
             )
         return MCPServer(plugin_manager), plugin_manager
 
@@ -779,9 +780,7 @@ class TestCallerErrorCodes:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bad_arguments", ["oops", 42, ["a"], True])
-    async def test_non_object_arguments_never_reaches_the_plugin(
-        self, bad_arguments
-    ):
+    async def test_non_object_arguments_never_reaches_the_plugin(self, bad_arguments):
         """Verified against prod before the fix: a string `arguments`
         reached the plugin, which called .get() on it, and the caller got
         "'str' object has no attribute 'get'" back as a tool RESULT with
@@ -853,6 +852,8 @@ class TestCallerErrorCodes:
         assert records, "expected an error log record"
         assert all(r.levelno == expected_level for r in records)
         if expected_level == logging.WARNING:
-            assert not any(r.exc_info for r in records), "no traceback for caller errors"
+            assert not any(r.exc_info for r in records), (
+                "no traceback for caller errors"
+            )
         else:
             assert any(r.exc_info for r in records), "genuine faults keep the traceback"

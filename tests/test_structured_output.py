@@ -57,9 +57,7 @@ def stat_rows(rows):
 
 class TestSpendingStatsStructured:
     async def _run(self, plugin, args, rows):
-        with patch.object(
-            plugin, "_query_statistics", AsyncMock(return_value=rows)
-        ):
+        with patch.object(plugin, "_query_statistics", AsyncMock(return_value=rows)):
             return await plugin._spending_stats(args)
 
     @pytest.mark.asyncio
@@ -162,23 +160,24 @@ class TestSpendingStatsStructured:
     @pytest.mark.asyncio
     async def test_procurement_fy2025_outlier_is_flagged(self, plugin):
         _text, structured = await self._run(
-            plugin, {"table": 3, "fiscal_year": 2025}, [{"sum_Amount": 1.18e9, "row_count": 5}]
+            plugin,
+            {"table": 3, "fiscal_year": 2025},
+            [{"sum_Amount": 1.18e9, "row_count": 5}],
         )
         validate(structured, schema_for(plugin, "spending_stats"))
         assert any(
-            c.get("gap") == "procurement_fy2025_outlier"
-            for c in structured["caveats"]
+            c.get("gap") == "procurement_fy2025_outlier" for c in structured["caveats"]
         )
 
     @pytest.mark.asyncio
     async def test_partial_fy2026_is_flagged(self, plugin):
         _text, structured = await self._run(
-            plugin, {"table": 0, "fiscal_year": 2026}, [{"sum_Amount": 1.0, "row_count": 1}]
+            plugin,
+            {"table": 0, "fiscal_year": 2026},
+            [{"sum_Amount": 1.0, "row_count": 1}],
         )
         validate(structured, schema_for(plugin, "spending_stats"))
-        assert any(
-            c.get("gap") == "fy2026_partial" for c in structured["caveats"]
-        )
+        assert any(c.get("gap") == "fy2026_partial" for c in structured["caveats"])
 
     @pytest.mark.asyncio
     async def test_percentile_reports_itself(self, plugin):
@@ -197,9 +196,7 @@ class TestSpendingStatsStructured:
 
 class TestVendorStructured:
     async def _search(self, plugin, args, rows):
-        with patch.object(
-            plugin, "_query_statistics", AsyncMock(return_value=rows)
-        ):
+        with patch.object(plugin, "_query_statistics", AsyncMock(return_value=rows)):
             return await plugin._search_by_vendor(args)
 
     @pytest.mark.asyncio
@@ -210,7 +207,11 @@ class TestVendorStructured:
             {"name_contains": "transunion"},
             [
                 {"Vendor_Name": "TLO TRANSUNION", "net_total": 100.0, "row_count": 2},
-                {"Vendor_Name": "TRANSUNION SHAREAB", "net_total": 50.0, "row_count": 1},
+                {
+                    "Vendor_Name": "TRANSUNION SHAREAB",
+                    "net_total": 50.0,
+                    "row_count": 1,
+                },
                 {
                     "Vendor_Name": "TransUnion Risk and Alternative Data Solutions Inc",
                     "net_total": 25.0,
@@ -263,8 +264,7 @@ class TestVendorStructured:
     @pytest.mark.asyncio
     async def test_capped_spelling_list_says_so(self, plugin):
         rows = [
-            {"Vendor_Name": f"V{i}", "net_total": 1.0, "row_count": 1}
-            for i in range(5)
+            {"Vendor_Name": f"V{i}", "net_total": 1.0, "row_count": 1} for i in range(5)
         ]
         _text, structured = await self._search(
             plugin, {"name_contains": "v", "limit": 5}, rows
@@ -336,9 +336,7 @@ class TestRecordRowsStructured:
         assert "Location" not in row
         # Negative amounts are real.
         assert row["Amount"] == -12.5
-        assert any(
-            c["code"] == "LOCATION_IS_BILLING" for c in structured["caveats"]
-        )
+        assert any(c["code"] == "LOCATION_IS_BILLING" for c in structured["caveats"])
 
     @pytest.mark.asyncio
     async def test_zero_matches_has_total_count_zero_not_null(self, plugin):
@@ -426,15 +424,11 @@ class TestFieldValuesStructured:
         assert flags[12] is False
         assert flags[13] is True
         assert flags[16] is True
-        assert any(
-            c["code"] == "ADJUSTMENT_PERIOD" for c in structured["caveats"]
-        )
+        assert any(c["code"] == "ADJUSTMENT_PERIOD" for c in structured["caveats"])
 
     @pytest.mark.asyncio
     async def test_empty_field_still_conforms(self, plugin):
-        _text, structured = await self._run(
-            plugin, {"table": 5, "field": "Fund"}, []
-        )
+        _text, structured = await self._run(plugin, {"table": 5, "field": "Fund"}, [])
         validate(structured, schema_for(plugin, "list_field_values"))
         assert structured["values"] == []
         assert structured["summary"]["returned"] == 0
@@ -447,9 +441,7 @@ class TestStructuredAndTextCannotDrift:
     """Both halves are rendered from ONE caveat list."""
 
     @pytest.mark.asyncio
-    async def test_every_structured_caveat_message_appears_in_the_text(
-        self, plugin
-    ):
+    async def test_every_structured_caveat_message_appears_in_the_text(self, plugin):
         with patch.object(
             plugin,
             "_query_statistics",
@@ -478,7 +470,10 @@ class TestDuplicateFilterIsAlwaysDeclared:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "args,expected",
-        [({"table": 0}, "excluded"), ({"table": 0, "include_duplicates": True}, "included")],
+        [
+            ({"table": 0}, "excluded"),
+            ({"table": 0, "include_duplicates": True}, "included"),
+        ],
     )
     async def test_query_block_states_the_filter_either_way(
         self, plugin, args, expected

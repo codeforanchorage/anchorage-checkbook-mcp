@@ -442,8 +442,7 @@ class TestTrapLayer:
         )
         # Any table touching 2026: partial-year note.
         assert any(
-            "FY2026" in n
-            for n in messages(plugin._fiscal_notices(TABLES[0], ["2026"]))
+            "FY2026" in n for n in messages(plugin._fiscal_notices(TABLES[0], ["2026"]))
         )
         assert plugin._fiscal_notices(TABLES[0], ["2022"]) == []
 
