@@ -705,9 +705,7 @@ class TestToolTitleEmission:
         """Clients fall back to annotations.title then name; an empty or
         null title would break that resolution order."""
         manager = self._manager_with(
-            ToolDefinition(
-                name="t", description="d", input_schema={"type": "object"}
-            )
+            ToolDefinition(name="t", description="d", input_schema={"type": "object"})
         )
 
         assert "title" not in manager.get_all_tools()[0]

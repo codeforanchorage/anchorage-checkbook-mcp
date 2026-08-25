@@ -118,9 +118,7 @@ class TestNotInferredFromValueError:
         import inspect
 
         src = inspect.getsource(AnchorageCheckbookPlugin)
-        remaining = [
-            line for line in src.splitlines() if "raise ValueError(" in line
-        ]
+        remaining = [line for line in src.splitlines() if "raise ValueError(" in line]
         assert len(remaining) == 1, (
             f"expected exactly the 1 non-JSON upstream raise, found "
             f"{len(remaining)} -- classify the new one deliberately "
@@ -129,9 +127,7 @@ class TestNotInferredFromValueError:
         )
 
     @pytest.mark.asyncio
-    async def test_upstream_fault_keeps_error_level_and_traceback(
-        self, plugin, caplog
-    ):
+    async def test_upstream_fault_keeps_error_level_and_traceback(self, plugin, caplog):
         """Pinned end to end: the surviving ValueError must still read as
         a server-side problem, not a caller mistake."""
         with patch.object(
@@ -150,9 +146,7 @@ class TestNotInferredFromValueError:
 
 class TestOuterHandlerLogging:
     @pytest.mark.asyncio
-    async def test_caller_error_logs_warning_without_traceback(
-        self, plugin, caplog
-    ):
+    async def test_caller_error_logs_warning_without_traceback(self, plugin, caplog):
         with patch.object(
             plugin,
             "_spending_stats",
@@ -163,17 +157,13 @@ class TestOuterHandlerLogging:
 
         assert result.success is False
         assert "4-digit year" in result.error_message
-        records = [
-            r for r in caplog.records if "spending_stats" in r.getMessage()
-        ]
+        records = [r for r in caplog.records if "spending_stats" in r.getMessage()]
         assert records, "expected a log record"
         assert all(r.levelno == logging.WARNING for r in records)
         assert not any(r.exc_info for r in records), "no traceback for caller errors"
 
     @pytest.mark.asyncio
-    async def test_server_fault_still_logs_error_with_traceback(
-        self, plugin, caplog
-    ):
+    async def test_server_fault_still_logs_error_with_traceback(self, plugin, caplog):
         """The quiet path must not swallow genuine failures."""
         with patch.object(
             plugin,
@@ -213,7 +203,12 @@ class TestNumericCoercion:
         [
             ("get_line_items", {"table": 0, "limit": "lots"}, "limit", "lots"),
             ("get_line_items", {"table": 0, "offset": "next"}, "offset", "next"),
-            ("query_checkbook", {"table": 0, "where": "1=1", "offset": "x"}, "offset", "x"),
+            (
+                "query_checkbook",
+                {"table": 0, "where": "1=1", "offset": "x"},
+                "offset",
+                "x",
+            ),
             ("top_vendors", {"table": 0, "n": "many"}, "n", "many"),
             (
                 "spending_stats",
@@ -221,8 +216,18 @@ class TestNumericCoercion:
                 "percentile",
                 "half",
             ),
-            ("get_line_items", {"table": 0, "fiscal_period": "Q1"}, "fiscal_period", "Q1"),
-            ("spending_stats", {"table": 0, "fiscal_year": "FY25"}, "fiscal_year", "FY25"),
+            (
+                "get_line_items",
+                {"table": 0, "fiscal_period": "Q1"},
+                "fiscal_period",
+                "Q1",
+            ),
+            (
+                "spending_stats",
+                {"table": 0, "fiscal_year": "FY25"},
+                "fiscal_year",
+                "FY25",
+            ),
         ],
     )
     async def test_bad_numeric_argument_names_itself(
@@ -269,13 +274,8 @@ class TestNoUnroutedCoercionRemains:
                 continue
             # Does this coercion read the caller's argument dict directly?
             for inner in ast.walk(node):
-                if (
-                    isinstance(inner, ast.Name)
-                    and inner.id in ("args", "arguments")
-                ):
-                    offenders.append(
-                        (node.lineno, ast.get_source_segment(src, node))
-                    )
+                if isinstance(inner, ast.Name) and inner.id in ("args", "arguments"):
+                    offenders.append((node.lineno, ast.get_source_segment(src, node)))
                     break
         return offenders
 
