@@ -58,7 +58,6 @@ See [Getting Started](docs/GETTING_STARTED.md) for full setup.
 | [Testing](docs/TESTING.md)                 | Local testing (Terminal, Claude, MCP Inspector) |
 | [Anchorage Checkbook](docs/CHECKBOOK.md)   | Open Checkbook MCP server (**this fork's plugin**) |
 | [Methodology](METHODOLOGY.md)              | The dedup-by-default decision and why totals differ from the MOA dashboard |
-| [Anchorage Parcels](docs/PARCELS.md)       | Parcel/assessment MCP server (deployed from its own fork) |
 
 
 ---
