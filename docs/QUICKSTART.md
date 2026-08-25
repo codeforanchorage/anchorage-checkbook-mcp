@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get your OpenContext MCP server running in 5 minutes.
+Get the Anchorage Open Checkbook MCP server running in 5 minutes.
 
 ## Prerequisites
 
@@ -9,50 +9,47 @@ Get your OpenContext MCP server running in 5 minutes.
 - AWS CLI configured with credentials
 - GitHub account (to fork repository)
 
-## Step 1: Fork Repository
-
-1. Go to [OpenContext repository](https://github.com/thealphacubicle/OpenContext)
-2. Click "Fork"
-3. Clone your fork locally
+## Step 1: Clone
 
 ```bash
-git clone https://github.com/your-org/opencontext.git
-cd opencontext
+git clone https://github.com/codeforanchorage/anchorage-checkbook-mcp.git
+cd anchorage-checkbook-mcp
 ```
 
-## Step 2: Configure Plugin
+## Step 2: Configure
 
-Edit `config.yaml` and enable **ONE** plugin:
+This fork ships its config ready to go — copy it into place:
 
-### For CKAN (e.g., data.boston.gov):
-
-```yaml
-server_name: "Boston OpenData"
-plugins:
-  ckan:
-    enabled: true
-    base_url: "https://data.boston.gov"
-    portal_url: "https://data.boston.gov"
-    city_name: "Boston"
-    timeout: 120
+```bash
+cp config-anchorage-checkbook.yaml config.yaml
 ```
 
-**Important:** Enable only ONE plugin. The deploy script will reject multiple plugins.
+That enables `anchorage_checkbook`, pointed at the Municipality of
+Anchorage's public Open Checkbook Feature Service. Nothing else to edit.
+
+**Important:** exactly ONE plugin may be enabled. The deploy script rejects
+zero or multiple — one fork = one MCP server.
 
 ## Step 3: Deploy
 
 Run the deployment script:
 
 ```bash
-./scripts/deploy.sh
+./scripts/deploy.sh --environment staging     # or: -e prod
 ```
+
+`--environment` is required: it selects both the tfvars file and the
+Terraform workspace (`anchorage-checkbook-staging` /
+`anchorage-checkbook-prod`), which share a state bucket with other MCP
+servers. Deploy to staging first.
 
 The script will:
 
 1. Validate configuration (ensures ONE plugin enabled)
-2. Package Lambda code
-3. Deploy to AWS Lambda
-4. Output Lambda URL
+2. Package the Lambda code, with `config.yaml` inside the bundle
+3. Run `terraform plan` and show it to you
+4. Apply only after you confirm
+5. Output the API Gateway URL
 
 You'll see output like:
 
@@ -69,12 +66,13 @@ Connect using **Claude Connectors** (same steps on both Claude.ai and Claude Des
 
 1. Go to **Settings** → **Connectors** (or **Customize** → **Connectors** on claude.ai)
 2. Click **Add custom connector**
-3. Enter a name (e.g. "Boston OpenData") and your API Gateway URL
+3. Enter a name (e.g. "Anchorage Open Checkbook") and your API Gateway URL
 
 Get the URL from the deploy output, or run:
 
 ```bash
 cd terraform/aws
+terraform workspace select anchorage-checkbook-staging   # or -prod
 terraform output -raw api_gateway_url
 ```
 
@@ -83,13 +81,24 @@ terraform output -raw api_gateway_url
 **Test locally first (optional):**
 
 ```bash
-# Start local server
+# Start local server (routes through the same handler production uses)
 python3 scripts/local_server.py
 
-# In another terminal, test with curl
-curl -X POST http://localhost:8000 \
+# In another terminal, test with curl. Note the /mcp path -- the root
+# path is not served.
+curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+# -> {"jsonrpc": "2.0", "id": 1, "result": {}}
+```
+
+A healthy `ping` returns an empty `result` object; the liveness signal is
+the response itself, not its body.
+
+For a fuller check, run the smoke test against whatever you started:
+
+```bash
+python scripts/smoke_prod.py http://localhost:8000/mcp
 ```
 
 **Test in Claude:**
@@ -97,10 +106,11 @@ curl -X POST http://localhost:8000 \
 Enable your connector in the chat (click "+" → Connectors → toggle on), then ask:
 
 ```
-Search for datasets about housing in Boston
+What did the Municipality of Anchorage spend by department in FY2025?
 ```
 
-Claude will use your MCP server to search the CKAN portal.
+Claude will call `spending_stats` and report net figures, with the
+duplicate-filter state and any known data gaps attached to the answer.
 
 ## Troubleshooting
 
@@ -128,10 +138,10 @@ Claude will use your MCP server to search the CKAN portal.
 
 - Read [Architecture Guide](ARCHITECTURE.md)
 - Create [Custom Plugin](CUSTOM_PLUGINS.md)
-- See [Examples](../examples/)
+- See [`config-example.yaml`](../config-example.yaml) for every configurable option
 
 ## Getting Help
 
 - [FAQ](FAQ.md)
-- [GitHub Issues](https://github.com/thealphacubicle/OpenContext/issues)
+- [GitHub Issues](https://github.com/codeforanchorage/anchorage-checkbook-mcp/issues)
 - [Documentation](.)

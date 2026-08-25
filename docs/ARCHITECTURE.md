@@ -37,7 +37,6 @@ custom_plugins/         # User plugins (auto-discovered)
 ├── template/
 │   └── plugin_template.py
 
-examples/               # Example configs and plugins
 ├── boston-opendata/
 └── custom-plugin/
 
@@ -128,7 +127,7 @@ async def health_check() -> bool
 **Reference:**
 - [Plugin template](../custom_plugins/template/plugin_template.py)
 - [CKAN plugin](../plugins/ckan/) – Full implementation
-- [Examples](../examples/custom-plugin/) – Custom plugin example
+- [Custom Plugins](CUSTOM_PLUGINS.md) – writing one, with a starting point in `custom_plugins/template/plugin_template.py`
 
 ## Plugin Interface
 

@@ -121,4 +121,4 @@ If your portal doesn't use CKAN, you can create a custom plugin. See [Custom Plu
 
 ## Examples
 
-See [examples/](../examples/) for complete configuration examples.
+See [`config-example.yaml`](../config-example.yaml) for a complete annotated configuration, and [`config-anchorage-checkbook.yaml`](../config-anchorage-checkbook.yaml) for the one this fork deploys.

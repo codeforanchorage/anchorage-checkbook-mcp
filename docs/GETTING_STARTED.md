@@ -16,25 +16,26 @@ Test the server locally before deploying.
 
 ### 1. Configure Your Plugin
 
-Create `config.yaml` from the template and enable **exactly one** plugin:
+This fork ships its config ready to go — copy it into place:
 
 ```bash
-cp config-example.yaml config.yaml
+cp config-anchorage-checkbook.yaml config.yaml
 ```
 
-Edit `config.yaml`. For CKAN:
+That enables the one plugin this fork deploys:
 
 ```yaml
 plugins:
-  ckan:
+  anchorage_checkbook:
     enabled: true
-    base_url: "https://data.boston.gov"
-    portal_url: "https://data.boston.gov"
-    city_name: "Boston"
-    timeout: 120
+    service_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/MOA_OpenCheckbook_Hosted/FeatureServer"
+    city_name: "Municipality of Anchorage"
+    timeout: 20
 ```
 
-Each deployment connects to one data source. To connect another source, deploy a separate server. See [Architecture](ARCHITECTURE.md) for details.
+`config.yaml` is gitignored; `config-anchorage-checkbook.yaml` is the tracked source of truth, and the two must stay identical (a test enforces it).
+
+Each deployment connects to one data source — enabling a second plugin is a hard error. To serve another source, fork again. See [Architecture](ARCHITECTURE.md) for details.
 
 ### 2. Start the Local Server
 
@@ -51,7 +52,7 @@ Connect using **Claude Connectors** (same steps on both Claude.ai and Claude Des
 
 1. Go to **Settings** → **Connectors** (or **Customize** → **Connectors** on claude.ai)
 2. Click **Add custom connector**
-3. Enter a name (e.g. "OpenContext Local") and URL: `http://localhost:8000/mcp`
+3. Enter a name (e.g. "Checkbook (local)") and URL: `http://localhost:8000/mcp`
 
 **Note:** Local servers (`localhost`) only work with Claude Desktop, since the connection runs from your machine. For Claude.ai (web), use the MCP Inspector or deploy to production first (see below).
 
@@ -71,7 +72,7 @@ You can also test with Claude by asking it to search your data, or use [Testing]
 
 ### 1. Fork & Configure
 
-1. Fork the [OpenContext repository](https://github.com/thealphacubicle/OpenContext)
+1. Clone [this repository](https://github.com/codeforanchorage/anchorage-checkbook-mcp)
 2. Clone your fork
 3. Create config: `cp config-example.yaml config.yaml`
 4. Edit `config.yaml` with **exactly one** plugin enabled
@@ -94,7 +95,7 @@ Connect using **Claude Connectors** (same steps on both Claude.ai and Claude Des
 
 1. Go to **Settings** → **Connectors** (or **Customize** → **Connectors** on claude.ai)
 2. Click **Add custom connector**
-3. Enter a name (e.g. "Boston OpenData") and your API Gateway URL
+3. Enter a name (e.g. "Anchorage Open Checkbook") and your API Gateway URL
 
 Get the URL:
 
@@ -133,4 +134,4 @@ To update config or code: edit `config.yaml` or your code, then run `./scripts/d
 
 ## Support
 
-[GitHub Issues](https://github.com/thealphacubicle/OpenContext/issues)
+[GitHub Issues](https://github.com/codeforanchorage/anchorage-checkbook-mcp/issues)
