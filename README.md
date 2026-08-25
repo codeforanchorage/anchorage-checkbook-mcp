@@ -39,7 +39,7 @@ Connect via **Claude Connectors** (same steps on both Claude.ai and Claude Deskt
 
 1. Go to **Settings** → **Connectors** (or **Customize** → **Connectors** on claude.ai)
 2. Click **Add custom connector**
-3. Enter a name (e.g. "Boston OpenData") and your API Gateway URL
+3. Enter a name (e.g. "Anchorage Open Checkbook") and your API Gateway URL
 
 Get the URL: `cd terraform/aws && terraform output -raw api_gateway_url`
 
@@ -62,10 +62,20 @@ See [Getting Started](docs/GETTING_STARTED.md) for full setup.
 
 ---
 
-## Examples
+## Try it
 
-- **Boston OpenData (CKAN):** [examples/boston-opendata/config.yaml](examples/boston-opendata/config.yaml)
-- **Custom plugin:** [examples/custom-plugin/](examples/custom-plugin/)
+The public deployment is at `https://checkbook.codeforanchorage.org/mcp`.
+Add it as a custom connector and ask questions like:
+
+- *"What did the Municipality of Anchorage spend by department in FY2025?"*
+- *"How much has MOA paid Chugach Electric, across every spelling of the name?"*
+- *"Show me procurement over $1M in FY2024."*
+
+Every answer comes back with its qualifications attached — figures are net
+of offsetting entries, duplicate ETL rows are filtered by default, and
+known data gaps are flagged rather than reported as zero. See
+[Methodology](METHODOLOGY.md) for why these totals deliberately differ from
+the public MOA dashboard.
 
 ---
 
