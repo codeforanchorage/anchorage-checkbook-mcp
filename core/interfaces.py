@@ -95,6 +95,15 @@ class ToolDefinition(BaseModel):
     input_schema: Dict[str, Any] = Field(
         ..., description="JSON Schema for tool input parameters"
     )
+    output_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Optional JSON Schema for the tool's structured result. "
+            "Declaring one is a commitment: the MCP spec requires that "
+            "structured results conform to it, and clients may validate. "
+            "Only set this for tools that return structured_content."
+        ),
+    )
     annotations: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
@@ -109,6 +118,15 @@ class ToolResult(BaseModel):
 
     content: List[Dict[str, Any]] = Field(
         default_factory=list, description="Tool output content"
+    )
+    structured_content: Optional[Any] = Field(
+        default=None,
+        description=(
+            "Optional machine-readable result, emitted as the MCP "
+            "`structuredContent` field. Must conform to the tool's "
+            "output_schema when one is declared. The human-readable "
+            "`content` is still sent alongside it."
+        ),
     )
     success: bool = Field(..., description="Whether the tool execution succeeded")
     error_message: Optional[str] = Field(

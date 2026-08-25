@@ -113,6 +113,31 @@ DUPLICATE_WARNING = (
     "Revenue). Sums over this response double-count those years."
 )
 
+# Stable caveat codes for the structured half of every response.
+#
+# These exist because this dataset's qualifications are load-bearing:
+# each one changes what a dollar figure MEANS, and until now every one
+# of them was prose a model had to notice and parse. A caller can branch
+# on `code`; the message is the same string rendered in the text, and
+# both come from ONE list so they cannot drift apart.
+CAVEAT_NET_OF_OFFSETS = "NET_OF_OFFSETS"
+CAVEAT_DUPLICATES_FILTERED = "DUPLICATES_FILTERED"
+CAVEAT_DUPLICATES_INCLUDED = "DUPLICATES_INCLUDED"
+CAVEAT_ADJUSTMENT_PERIOD = "ADJUSTMENT_PERIOD"
+CAVEAT_VENDOR_SPELLING_VARIANTS = "VENDOR_SPELLING_VARIANTS"
+CAVEAT_KNOWN_GAP = "KNOWN_GAP"
+CAVEAT_LOCATION_IS_BILLING = "LOCATION_IS_BILLING"
+CAVEAT_PERIOD_SCALE = "PERIOD_SCALE"
+CAVEAT_TABLE_EMPTY = "TABLE_EMPTY"
+CAVEAT_REFUNDS_LABEL = "REFUNDS_LABEL"
+CAVEAT_TRUNCATED = "TRUNCATED"
+
+# Fiscal periods 13-16 are year-end ADJUSTMENT periods, not calendar
+# months. Emitted as a caveat whenever a result can contain them, because
+# a consumer that maps period 14 to "February" is silently wrong.
+ADJUSTMENT_PERIOD_MIN = 13
+ADJUSTMENT_PERIOD_MAX = 16
+
 # Where the 'code : label' convention applies (Fund, G_L_Account),
 # this exact separator -- space, colon, space -- splits code from label.
 CODE_LABEL_SEP = " : "
@@ -581,18 +606,56 @@ class AnchorageCheckbookPlugin(MCPPlugin):
     # Tools compose these instead of re-deciding the semantics locally,
     # so the safe behavior cannot be skipped by accident.
 
-    def _dedup_parts(self, args: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    @staticmethod
+    def _caveat(code: str, message: str, **extra: Any) -> Dict[str, Any]:
+        """One qualification, in the single form both halves render from.
+
+        The text response prints ``message``; the structured response
+        emits the whole object. Building both from one list is what stops
+        the prose and the machine-readable channel disagreeing about what
+        a number means.
+        """
+        caveat: Dict[str, Any] = {"code": code, "message": message}
+        caveat.update({k: v for k, v in extra.items() if v is not None})
+        return caveat
+
+    @staticmethod
+    def _caveat_messages(caveats: List[Dict[str, Any]]) -> List[str]:
+        """The prose rendering of a caveat list."""
+        return [c["message"] for c in caveats]
+
+    def _dedup_parts(
+        self, args: Dict[str, Any]
+    ) -> Tuple[Optional[str], Dict[str, Any]]:
         """Trap 2.1 -- the Duplicate double-load.
 
-        Returns (where_clause, warning): the ``Duplicate='No'`` clause
-        injected into EVERY query by default, or (None, warning) when
+        Returns (where_clause, caveat): the ``Duplicate='No'`` clause
+        injected into EVERY query by default, or (None, caveat) when
         the caller explicitly set include_duplicates=True. The filter
         is on the flag, never on a fiscal year -- Revenue proves the
         double-load recurs (FY2023 AND FY2026).
+
+        A caveat is returned in BOTH cases, never only on the unsafe
+        one. This filter is the single difference between this server's
+        figures and the published MOA dashboard's, so a consumer has to
+        be able to tell which it got -- silence would read as "no
+        filtering happened".
         """
         if bool(args.get("include_duplicates", False)):
-            return None, DUPLICATE_WARNING
-        return f"{DUPLICATE_FIELD} = 'No'", None
+            return None, self._caveat(
+                CAVEAT_DUPLICATES_INCLUDED,
+                DUPLICATE_WARNING,
+                duplicate_filter="included",
+            )
+        return f"{DUPLICATE_FIELD} = 'No'", self._caveat(
+            CAVEAT_DUPLICATES_FILTERED,
+            "Duplicate='No' was applied by default: the upstream ETL "
+            "double-loaded whole fiscal years as exact shadow copies "
+            "(FY2023 on every table; FY2023 AND FY2026 on Revenue). "
+            "Totals here will NOT match the public MOA Open Checkbook "
+            "dashboard unless that user filters the same column.",
+            duplicate_filter="excluded",
+        )
 
     @staticmethod
     def _reject_pubdate_filter(clause: Optional[str]) -> None:
@@ -664,29 +727,92 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             out.append(expanded)
         return out
 
-    @staticmethod
-    def _fiscal_notices(info: TableInfo, years: Optional[Iterable[Any]]) -> List[str]:
+    @classmethod
+    def _fiscal_notices(
+        cls, info: TableInfo, years: Optional[Iterable[Any]]
+    ) -> List[Dict[str, Any]]:
         """Trap 2.8 -- known completeness gaps.
 
-        Notices for the fiscal years a query touches. ``years`` is the
+        Caveats for the fiscal years a query touches. ``years`` is the
         set of years the query was filtered to; None means unfiltered
         (the query spans all years, so every applicable gap is noted).
+
+        All three are KNOWN_GAP: each is a case where the data does not
+        mean what its face value says -- a missing year that reads as
+        zero, a partial year that reads as a decline, a bulk load that
+        reads as a spending spike.
         """
         touched = None if years is None else {str(y) for y in years if y is not None}
 
         def touches(year: str) -> bool:
             return touched is None or year in touched
 
-        notes: List[str] = []
+        notes: List[Dict[str, Any]] = []
         # Multi-year revenue results silently skip FY2024; a query
         # pinned to one other year doesn't need the warning.
         if info.id == 4 and (touched is None or "2024" in touched or len(touched) > 1):
-            notes.append(REVENUE_FY2024_NOTE)
+            notes.append(
+                cls._caveat(
+                    CAVEAT_KNOWN_GAP, REVENUE_FY2024_NOTE, gap="revenue_fy2024"
+                )
+            )
         if info.id == 3 and touches("2025"):
-            notes.append(PROCUREMENT_FY2025_NOTE)
+            notes.append(
+                cls._caveat(
+                    CAVEAT_KNOWN_GAP,
+                    PROCUREMENT_FY2025_NOTE,
+                    gap="procurement_fy2025_outlier",
+                )
+            )
         if touches("2026"):
-            notes.append(FY2026_PARTIAL_NOTE)
+            notes.append(
+                cls._caveat(
+                    CAVEAT_KNOWN_GAP, FY2026_PARTIAL_NOTE, gap="fy2026_partial"
+                )
+            )
         return notes
+
+    @classmethod
+    def _adjustment_period_caveat(
+        cls, periods: Iterable[Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Trap 2.2, in the structured half.
+
+        Fires when a result actually contains one of fiscal periods
+        13-16. Those are year-end adjustment entries, not calendar
+        months; a consumer that maps period 14 to a month name is
+        silently wrong, so the structured half never emits a month-like
+        label and says so explicitly when the range is in play.
+        """
+        hit = sorted(
+            {
+                int(p)
+                for p in periods
+                if isinstance(p, (int, float))
+                and ADJUSTMENT_PERIOD_MIN <= int(p) <= ADJUSTMENT_PERIOD_MAX
+            }
+        )
+        if not hit:
+            return None
+        return cls._caveat(
+            CAVEAT_ADJUSTMENT_PERIOD,
+            f"This result includes fiscal period(s) "
+            f"{', '.join(str(p) for p in hit)}, which are year-end "
+            f"ADJUSTMENT periods, not calendar months. Never map them to "
+            f"a month name.",
+            periods=hit,
+        )
+
+    @staticmethod
+    def _is_adjustment_period(period: Any) -> Optional[bool]:
+        """Whether one period number is a year-end adjustment period."""
+        if period is None:
+            return None
+        try:
+            value = int(period)
+        except (TypeError, ValueError):
+            return None
+        return ADJUSTMENT_PERIOD_MIN <= value <= ADJUSTMENT_PERIOD_MAX
 
     @staticmethod
     def _require_entity_field(info: TableInfo) -> str:
@@ -1209,6 +1335,87 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         )
         return "\n".join(lines)
 
+    def _query_block(
+        self,
+        info: TableInfo,
+        *,
+        where: Optional[str],
+        dedup_caveat: Dict[str, Any],
+        args: Optional[Dict[str, Any]] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        pubdate: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """The `query` half of every structured response.
+
+        `duplicate_filter` is taken from the dedup caveat rather than
+        recomputed, so the structured field and the caveat can never
+        disagree about whether the filter was applied.
+
+        The fiscal period is emitted as a NUMBER plus an
+        `is_adjustment_period` flag and never as anything month-shaped:
+        periods 13-16 are year-end adjustments, and a consumer handed
+        "period 14" alongside anything month-like will map it to
+        February.
+        """
+        args = args or {}
+        period = args.get("fiscal_period")
+        year = args.get("fiscal_year")
+        block: Dict[str, Any] = {
+            "table": info.id,
+            "table_name": info.name,
+            "duplicate_filter": dedup_caveat["duplicate_filter"],
+            "where": where,
+            "fiscal_year": str(year) if year is not None else None,
+            "fiscal_period": (
+                self._int_arg(args, "fiscal_period") if period is not None else None
+            ),
+            "is_adjustment_period": self._is_adjustment_period(period),
+            "data_snapshot": pubdate,
+        }
+        if limit is not None:
+            block["limit"] = limit
+        if offset is not None:
+            block["offset"] = offset
+        return block
+
+    @staticmethod
+    def _split_location(value: Any) -> Tuple[Optional[str], Optional[str]]:
+        """Split a Location value into billing city and state.
+
+        Location is the VENDOR'S billing city/state, not a Municipality
+        of Anchorage location. The structured half names the parts
+        `billing_city` / `billing_state` precisely so nobody builds a map
+        out of them. Values are dirty upstream (trailing whitespace, junk
+        entries), so anything that does not parse comes back as
+        (raw, None) rather than being dropped.
+        """
+        if not isinstance(value, str) or not value.strip():
+            return None, None
+        text = value.strip()
+        if "," in text:
+            city, _, state = text.partition(",")
+            return city.strip() or None, state.strip() or None
+        return text, None
+
+    def _structured_rows(
+        self, records: List[Dict[str, Any]], info: TableInfo
+    ) -> List[Dict[str, Any]]:
+        """Machine-readable rows: raw values, dates rendered, Location
+        split into explicitly-named billing fields."""
+        rows: List[Dict[str, Any]] = []
+        for record in records:
+            row: Dict[str, Any] = {}
+            for key, value in record.items():
+                if key == "Location":
+                    city, state = self._split_location(value)
+                    row["billing_city"] = city
+                    row["billing_state"] = state
+                else:
+                    row[key] = self._render_value(info.id, key, value)
+            rows.append(row)
+        return rows
+
     @staticmethod
     def _truncation_banner(shown: int, total: int, limit: int) -> str:
         return (
@@ -1262,16 +1469,27 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         requested: Optional[int] = None,
         total_count: Optional[int] = None,
         heading: Optional[str] = None,
-        notices: Optional[List[str]] = None,
+        caveats: Optional[List[Dict[str, Any]]] = None,
+        dedup_caveat: Optional[Dict[str, Any]] = None,
+        args: Optional[Dict[str, Any]] = None,
+        offset: Optional[int] = None,
         pubdate: Optional[str] = None,
-    ) -> str:
+    ) -> Tuple[str, Dict[str, Any]]:
         """Assemble a row-listing response.
 
         Layout: heading, §3.4 BOOKENDED truncation banner (top AND
         bottom, quoting the true total from returnCountOnly), trap
-        notices, count line, §3.3 compact table, provenance footer.
+        caveats, count line, §3.3 compact table, provenance footer.
         Records should already be code-label-expanded by the caller.
+
+        Returns (text, structured_content). Both halves are built here,
+        from the same records and the same caveat list, which is what
+        keeps get_line_items and query_checkbook consistent with each
+        other and keeps the prose from drifting from the machine-readable
+        result.
         """
+        caveats = list(caveats or [])
+        notices = self._caveat_messages(caveats)
         lines: List[str] = []
         if heading:
             lines += [heading, ""]
@@ -1284,6 +1502,15 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             else None
         )
         if banner:
+            # The truncation warning is a caveat too, so a caller that
+            # only reads the structured half cannot miss that `rows` is
+            # a sample.
+            caveats.insert(
+                0,
+                self._caveat(
+                    CAVEAT_TRUNCATED, banner, count=total_count, limit=limit
+                ),
+            )
             lines.append(banner)
         if notices:
             lines.extend(notices)
@@ -1317,7 +1544,36 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 pubdate=pubdate,
             ),
         ]
-        return "\n".join(lines)
+
+        rows = self._structured_rows(records, info)
+        # Any adjustment period actually present in the result, so a
+        # caller can never read period 14 as a calendar month.
+        period_caveat = self._adjustment_period_caveat(
+            r.get(PERIOD_FIELD) for r in rows
+        )
+        if period_caveat:
+            caveats.append(period_caveat)
+            lines.insert(0, period_caveat["message"])
+
+        structured = {
+            "query": self._query_block(
+                info,
+                where=where,
+                dedup_caveat=dedup_caveat or self._dedup_parts({})[1],
+                args=args,
+                limit=limit,
+                offset=offset,
+                pubdate=pubdate,
+            ),
+            "summary": {
+                "returned": len(records),
+                "total_count": total_count,
+                "truncated": bool(truncated),
+            },
+            "rows": rows,
+            "caveats": caveats,
+        }
+        return "\n".join(lines), structured
 
     # ── Tool: list_tables ─────────────────────────────────────────────
 
@@ -1516,7 +1772,9 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             f"group_by must be a field name or a list of field names (got {raw!r})"
         )
 
-    async def _spending_stats(self, args: Dict[str, Any]) -> str:
+    async def _spending_stats(
+        self, args: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
         info = self._table_info(args.get("table"))
         measure = str(args.get("measure") or info.default_measure or "").strip()
         if measure not in info.measure_fields:
@@ -1540,7 +1798,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 self._reject_pubdate_filter(g)
             self._check_field_exists(info, g, "group_by")
 
-        dedup_clause, dup_warning = self._dedup_parts(args)
+        dedup_clause, dedup_caveat = self._dedup_parts(args)
         clauses, years = self._structured_where(info, args)
         where = self._combine_where(dedup_clause, *clauses)
 
@@ -1600,28 +1858,44 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             f" by {', '.join(groups)}" if groups else ""
         )
 
-        notices: List[str] = []
-        if dup_warning:
-            notices.append(dup_warning)
-        notices.append(NET_NOTE)
-        notices.extend(self._fiscal_notices(info, sorted(years) if years else None))
+        caveats: List[Dict[str, Any]] = [dedup_caveat]
+        caveats.append(self._caveat(CAVEAT_NET_OF_OFFSETS, NET_NOTE))
+        caveats.extend(self._fiscal_notices(info, sorted(years) if years else None))
         if info.status == "empty":
-            notices.append(f"Table {info.id} is EMPTY upstream (0 rows).")
+            caveats.append(
+                self._caveat(
+                    CAVEAT_TABLE_EMPTY,
+                    f"Table {info.id} is EMPTY upstream (0 rows).",
+                )
+            )
         # Trap 2.8, made explicit in-band: a Fiscal_Year grouping on
-        # Revenue that spans years silently skips FY2024.
+        # Revenue that spans years silently skips FY2024. Without this a
+        # missing year reads as a year with no revenue.
         if (
             info.id == 4
             and FISCAL_YEAR_FIELD in groups
             and years is None
             and not any(str(r.get(FISCAL_YEAR_FIELD)) == "2024" for r in rows)
         ):
-            notices.append(
-                "Confirmed in these results: FY2024 is ABSENT from the "
-                "groups below (no revenue rows exist for it upstream)."
+            caveats.append(
+                self._caveat(
+                    CAVEAT_KNOWN_GAP,
+                    "Confirmed in these results: FY2024 is ABSENT from the "
+                    "groups below (no revenue rows exist for it upstream). "
+                    "That is a DATA GAP, not zero revenue.",
+                    gap="revenue_fy2024_confirmed_absent",
+                )
             )
+        # Any year-end adjustment period actually present in the groups.
+        if PERIOD_FIELD in groups:
+            period_caveat = self._adjustment_period_caveat(
+                r.get(PERIOD_FIELD) for r in rows
+            )
+            if period_caveat:
+                caveats.append(period_caveat)
 
         lines = [heading, ""]
-        lines.extend(notices)
+        lines.extend(self._caveat_messages(caveats))
         lines.append("")
         if not rows:
             lines.append("No statistics returned (0 matching rows).")
@@ -1651,6 +1925,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 else:
                     group_note += ")"
                 lines.append(group_note)
+        pubdate = await self._pubdate_snapshot(info.id)
         lines += [
             "",
             self._provenance_footer(
@@ -1659,10 +1934,46 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 limit=limit if groups else None,
                 requested=requested if groups else None,
                 row_count=len(rows),
-                pubdate=await self._pubdate_snapshot(info.id),
+                pubdate=pubdate,
             ),
         ]
-        return "\n".join(lines)
+
+        # The structured half is built OUTSIDE the `if rows:` branch
+        # above: a query that matched nothing must still return a
+        # conforming object, or a declared outputSchema is violated
+        # exactly where a caller most needs to tell "no rows" from
+        # "no answer".
+        structured = {
+            "query": self._query_block(
+                info,
+                where=where,
+                dedup_caveat=dedup_caveat,
+                args=args,
+                limit=limit if groups else None,
+                pubdate=pubdate,
+            ),
+            "summary": {
+                "stat_type": stat_type,
+                "measure": measure,
+                "percentile": percentile,
+                "group_by": groups,
+                "groups": len(rows),
+                "truncated": bool(groups and len(rows) >= limit),
+            },
+            "rows": [
+                {
+                    "group": {
+                        g: self._render_value(info.id, g, row.get(g))
+                        for g in groups
+                    },
+                    "value": row.get(out_name),
+                    "row_count": row.get("row_count"),
+                }
+                for row in rows
+            ],
+            "caveats": caveats,
+        }
+        return "\n".join(lines), structured
 
     # ── Tool: search_by_vendor ────────────────────────────────────────
 
@@ -1696,7 +2007,9 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             extra_params={"resultRecordCount": str(limit)},
         )
 
-    async def _search_by_vendor(self, args: Dict[str, Any]) -> str:
+    async def _search_by_vendor(
+        self, args: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
         name = str(args.get("name_contains") or "").strip()
         if not name:
             raise ToolInputError("name_contains is required")
@@ -1705,7 +2018,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         measure = info.default_measure
         limit, requested = self._clamp_limit(args, default=50, maximum=200)
 
-        dedup_clause, dup_warning = self._dedup_parts(args)
+        dedup_clause, dedup_caveat = self._dedup_parts(args)
         year_clause = None
         years = None
         if args.get("fiscal_year") is not None:
@@ -1721,19 +2034,27 @@ class AnchorageCheckbookPlugin(MCPPlugin):
 
         rows = await self._entity_group_stats(info, where, measure, limit)
 
-        notices = [VENDOR_NORMALIZATION_NOTE]
-        if dup_warning:
-            notices.insert(0, dup_warning)
+        caveats: List[Dict[str, Any]] = [dedup_caveat]
+        caveats.append(
+            self._caveat(
+                CAVEAT_VENDOR_SPELLING_VARIANTS,
+                VENDOR_NORMALIZATION_NOTE,
+                count=len(rows),
+            )
+        )
+        caveats.append(self._caveat(CAVEAT_NET_OF_OFFSETS, NET_NOTE))
         if any(str(r.get(entity)) == "Refunds" for r in rows):
-            notices.append(REFUNDS_NOTE)
-        notices.extend(self._fiscal_notices(info, sorted(years) if years else None))
+            caveats.append(self._caveat(CAVEAT_REFUNDS_LABEL, REFUNDS_NOTE))
+        caveats.extend(self._fiscal_notices(info, sorted(years) if years else None))
 
         lines = [
             f"## {entity} spellings matching `{name}` (case-insensitive substring)",
             "",
         ]
-        lines.extend(notices)
+        lines.extend(self._caveat_messages(caveats))
         lines.append("")
+        combined_net = sum(r.get("net_total") or 0 for r in rows) if rows else None
+        combined_rows = sum(r.get("row_count") or 0 for r in rows) if rows else None
         if not rows:
             lines.append(
                 f"No {entity} values contain `{name}`. The match is a "
@@ -1742,8 +2063,6 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 f"always excluded."
             )
         else:
-            combined_net = sum(r.get("net_total") or 0 for r in rows)
-            combined_rows = sum(r.get("row_count") or 0 for r in rows)
             summary = (
                 f"{len(rows)} distinct spelling(s); combined net total "
                 f"{self._fmt_money(combined_net)} across "
@@ -1764,6 +2083,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 for r in rows
             ]
             lines.extend(self._format_table(display, info.id))
+        pubdate = await self._pubdate_snapshot(info.id)
         lines += [
             "",
             self._provenance_footer(
@@ -1772,21 +2092,98 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 limit=limit,
                 requested=requested,
                 row_count=len(rows),
-                pubdate=await self._pubdate_snapshot(info.id),
+                pubdate=pubdate,
             ),
         ]
-        return "\n".join(lines)
+
+        # Built outside the `if rows:` branch: a spelling that does not
+        # exist is one of the most common queries this tool gets, and it
+        # must still return a conforming structured result.
+        structured = self._vendor_structured(
+            info,
+            rows,
+            entity=entity,
+            measure=measure,
+            where=where,
+            dedup_caveat=dedup_caveat,
+            caveats=caveats,
+            args=args,
+            limit=limit,
+            pubdate=pubdate,
+            combined_net=combined_net,
+            combined_rows=combined_rows,
+            ranked=False,
+        )
+        return "\n".join(lines), structured
+
+    def _vendor_structured(
+        self,
+        info: TableInfo,
+        rows: List[Dict[str, Any]],
+        *,
+        entity: str,
+        measure: str,
+        where: str,
+        dedup_caveat: Dict[str, Any],
+        caveats: List[Dict[str, Any]],
+        args: Dict[str, Any],
+        limit: int,
+        pubdate: Optional[str],
+        combined_net: Optional[float] = None,
+        combined_rows: Optional[int] = None,
+        ranked: bool = False,
+    ) -> Dict[str, Any]:
+        """Structured half shared by search_by_vendor and top_vendors.
+
+        One row per DISTINCT stored spelling, carrying the raw name
+        exactly as held upstream. Nothing is normalized or merged: an
+        entity that appears three ways stays three rows, because deciding
+        they are the same entity is the caller's judgement call, not the
+        server's. No derived normalized key is emitted at all -- one
+        would have to be marked non-authoritative, and the honest thing
+        on a finance server is not to guess.
+        """
+        return {
+            "query": self._query_block(
+                info,
+                where=where,
+                dedup_caveat=dedup_caveat,
+                args=args,
+                limit=limit,
+                pubdate=pubdate,
+            ),
+            "summary": {
+                "entity_field": entity,
+                "measure": measure,
+                "spellings": len(rows),
+                "combined_net_sum": combined_net,
+                "combined_row_count": combined_rows,
+                "truncated": bool(rows) and len(rows) >= limit,
+            },
+            "rows": [
+                {
+                    **({"rank": i} if ranked else {}),
+                    "name": r.get(entity),
+                    "net_sum": r.get("net_total"),
+                    "row_count": r.get("row_count"),
+                }
+                for i, r in enumerate(rows, 1)
+            ],
+            "caveats": caveats,
+        }
 
     # ── Tool: top_vendors ─────────────────────────────────────────────
 
-    async def _top_vendors(self, args: Dict[str, Any]) -> str:
+    async def _top_vendors(
+        self, args: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
         info = self._table_info(args.get("table", 0))
         entity = self._require_entity_field(info)
         measure = info.default_measure
         requested = self._int_arg(args, "n", 20)
         n = max(1, min(requested, 100))
 
-        dedup_clause, dup_warning = self._dedup_parts(args)
+        dedup_clause, dedup_caveat = self._dedup_parts(args)
         filter_args = {k: args.get(k) for k in ("fiscal_year", "business_area")}
         clauses, years = self._structured_where(info, filter_args)
         where = self._combine_where(
@@ -1798,15 +2195,27 @@ class AnchorageCheckbookPlugin(MCPPlugin):
 
         rows = await self._entity_group_stats(info, where, measure, n)
 
-        notices = [
-            f"NULL payees (journal entries, fund transfers) and the "
-            f"'Refunds' accounting label are excluded. {REFUNDS_NOTE}",
-            VENDOR_NORMALIZATION_NOTE,
-            NET_NOTE,
-        ]
-        if dup_warning:
-            notices.insert(0, dup_warning)
-        notices.extend(self._fiscal_notices(info, sorted(years) if years else None))
+        caveats: List[Dict[str, Any]] = [dedup_caveat]
+        caveats.append(
+            self._caveat(
+                CAVEAT_REFUNDS_LABEL,
+                f"NULL payees (journal entries, fund transfers) and the "
+                f"'Refunds' accounting label are excluded. {REFUNDS_NOTE}",
+            )
+        )
+        caveats.append(
+            self._caveat(
+                CAVEAT_VENDOR_SPELLING_VARIANTS,
+                f"{VENDOR_NORMALIZATION_NOTE} A ranking by spelling is "
+                f"therefore not a ranking by entity: an entity split "
+                f"across spellings ranks lower than its true total, and "
+                f"may not appear at all. Use search_by_vendor to find "
+                f"every spelling of a given payee.",
+                count=len(rows),
+            )
+        )
+        caveats.append(self._caveat(CAVEAT_NET_OF_OFFSETS, NET_NOTE))
+        caveats.extend(self._fiscal_notices(info, sorted(years) if years else None))
 
         scope_bits = []
         if args.get("fiscal_year") is not None:
@@ -1820,7 +2229,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             f"({info.label}){scope}",
             "",
         ]
-        lines.extend(notices)
+        lines.extend(self._caveat_messages(caveats))
         lines.append("")
         if not rows:
             lines.append("No matching rows.")
@@ -1835,6 +2244,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 for i, r in enumerate(rows, 1)
             ]
             lines.extend(self._format_table(display, info.id))
+        pubdate = await self._pubdate_snapshot(info.id)
         lines += [
             "",
             self._provenance_footer(
@@ -1843,17 +2253,39 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 limit=n,
                 requested=requested,
                 row_count=len(rows),
-                pubdate=await self._pubdate_snapshot(info.id),
+                pubdate=pubdate,
             ),
         ]
-        return "\n".join(lines)
+
+        structured = self._vendor_structured(
+            info,
+            rows,
+            entity=entity,
+            measure=measure,
+            where=where,
+            dedup_caveat=dedup_caveat,
+            caveats=caveats,
+            args=args,
+            limit=n,
+            pubdate=pubdate,
+            combined_net=(
+                sum(r.get("net_total") or 0 for r in rows) if rows else None
+            ),
+            combined_rows=(
+                sum(r.get("row_count") or 0 for r in rows) if rows else None
+            ),
+            ranked=True,
+        )
+        return "\n".join(lines), structured
 
     # ── Tool: get_line_items ──────────────────────────────────────────
 
-    async def _get_line_items(self, args: Dict[str, Any]) -> str:
+    async def _get_line_items(
+        self, args: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
         info = self._table_info(args.get("table"))
         include_dup = bool(args.get("include_duplicates", False))
-        dedup_clause, dup_warning = self._dedup_parts(args)
+        dedup_clause, dedup_caveat = self._dedup_parts(args)
         clauses, years = self._structured_where(info, args)
         where = self._combine_where(dedup_clause, *clauses)
         limit, requested = self._clamp_limit(args, default=100, maximum=self.MAX_ROWS)
@@ -1876,14 +2308,22 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         )
         records = self._expand_code_labels(records, info)
 
-        notices: List[str] = []
-        if dup_warning:
-            notices.append(dup_warning)
-        notices.extend(self._fiscal_notices(info, sorted(years) if years else None))
+        caveats: List[Dict[str, Any]] = [dedup_caveat]
+        caveats.append(self._caveat(CAVEAT_NET_OF_OFFSETS, NET_NOTE))
+        caveats.extend(self._fiscal_notices(info, sorted(years) if years else None))
         if info.status == "empty":
-            notices.append(f"Table {info.id} is EMPTY upstream (0 rows).")
+            caveats.append(
+                self._caveat(
+                    CAVEAT_TABLE_EMPTY,
+                    f"Table {info.id} is EMPTY upstream (0 rows).",
+                )
+            )
+        if "Location" in self._default_out_fields(info, include_dup):
+            caveats.append(
+                self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE)
+            )
 
-        text = self._format_rows_response(
+        text, structured = self._format_rows_response(
             info,
             records,
             where=where,
@@ -1894,7 +2334,10 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 f"## Line items -- table {info.id} ({info.label})"
                 + (f", offset {offset}" if offset else "")
             ),
-            notices=notices or None,
+            caveats=caveats,
+            dedup_caveat=dedup_caveat,
+            args=args,
+            offset=offset,
             pubdate=await self._pubdate_snapshot(info.id),
         )
         remaining = None if total is None else total - (offset + len(records))
@@ -1904,11 +2347,13 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 f"with offset={offset + len(records)} (same filters) "
                 f"for the next page."
             )
-        return text
+        return text, structured
 
     # ── Tool: list_field_values ───────────────────────────────────────
 
-    async def _list_field_values(self, args: Dict[str, Any]) -> str:
+    async def _list_field_values(
+        self, args: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
         info = self._table_info(args.get("table"))
         field_name = self._check_field_exists(
             info, str(args.get("field") or ""), "field"
@@ -1926,7 +2371,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             raise ToolInputError("OBJECTID is an internal row id; nothing to list.")
 
         limit, requested = self._clamp_limit(args, default=100, maximum=1000)
-        dedup_clause, dup_warning = self._dedup_parts(args)
+        dedup_clause, dedup_caveat = self._dedup_parts(args)
         where = self._combine_where(dedup_clause)
         values = await self._fetch_distinct_values(
             info.id, field_name, where=where, limit=limit + 1
@@ -1934,22 +2379,32 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         more = len(values) > limit
         values = values[:limit]
 
-        notices: List[str] = []
-        if dup_warning:
-            notices.append(dup_warning)
+        caveats: List[Dict[str, Any]] = [dedup_caveat]
         if field_name == PERIOD_FIELD:
-            notices.append(PERIOD_NOTE)
+            caveats.append(self._caveat(CAVEAT_PERIOD_SCALE, PERIOD_NOTE))
+            period_caveat = self._adjustment_period_caveat(values)
+            if period_caveat:
+                caveats.append(period_caveat)
         if field_name == "Location":
-            notices.append(LOCATION_NOTE)
+            caveats.append(
+                self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE)
+            )
         if field_name == info.entity_field:
-            notices.append(VENDOR_NORMALIZATION_NOTE)
+            caveats.append(
+                self._caveat(
+                    CAVEAT_VENDOR_SPELLING_VARIANTS,
+                    VENDOR_NORMALIZATION_NOTE,
+                    count=len(values),
+                )
+            )
         if field_name == FISCAL_YEAR_FIELD:
-            notices.extend(self._fiscal_notices(info, None))
+            caveats.extend(self._fiscal_notices(info, None))
 
         lines = [
             f"## Distinct values of {field_name} -- table {info.id} ({info.label})",
             "",
         ]
+        notices = self._caveat_messages(caveats)
         lines.extend(notices)
         if notices:
             lines.append("")
@@ -1982,6 +2437,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             else:
                 for v in values:
                     lines.append(f"- {self._render_value(info.id, field_name, v)}")
+        pubdate = await self._pubdate_snapshot(info.id)
         lines += [
             "",
             self._provenance_footer(
@@ -1990,14 +2446,48 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 limit=limit,
                 requested=requested,
                 row_count=len(values),
-                pubdate=await self._pubdate_snapshot(info.id),
+                pubdate=pubdate,
             ),
         ]
-        return "\n".join(lines)
+
+        # Outside the `if values:` branch, for the same reason as
+        # everywhere else: an empty field must still conform.
+        structured_values: List[Dict[str, Any]] = []
+        for v in values:
+            rendered = self._render_value(info.id, field_name, v)
+            entry: Dict[str, Any] = {"value": rendered}
+            if field_name in info.code_label_fields:
+                code, label = self._split_code_label(v)
+                entry["code"] = code
+                entry["label"] = label
+            if field_name == PERIOD_FIELD:
+                entry["is_adjustment_period"] = self._is_adjustment_period(v)
+            structured_values.append(entry)
+
+        structured = {
+            "query": self._query_block(
+                info,
+                where=where,
+                dedup_caveat=dedup_caveat,
+                args=args,
+                limit=limit,
+                pubdate=pubdate,
+            ),
+            "summary": {
+                "field": field_name,
+                "returned": len(values),
+                "more_available": bool(more),
+            },
+            "values": structured_values,
+            "caveats": caveats,
+        }
+        return "\n".join(lines), structured
 
     # ── Tool: query_checkbook ─────────────────────────────────────────
 
-    async def _query_checkbook(self, args: Dict[str, Any]) -> str:
+    async def _query_checkbook(
+        self, args: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
         info = self._table_info(args.get("table"))
         raw_where = str(args.get("where") or "").strip()
         if not raw_where:
@@ -2008,7 +2498,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             )
         include_dup = bool(args.get("include_duplicates", False))
         user_where = self._validate_raw_where(info, raw_where)
-        dedup_clause, dup_warning = self._dedup_parts(args)
+        dedup_clause, dedup_caveat = self._dedup_parts(args)
         where = self._combine_where(dedup_clause, user_where)
         limit, requested = self._clamp_limit(args, default=200, maximum=self.MAX_ROWS)
         offset = max(0, self._int_arg(args, "offset", 0))
@@ -2030,13 +2520,21 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         )
         records = self._expand_code_labels(records, info)
 
-        notices: List[str] = []
-        if dup_warning:
-            notices.append(dup_warning)
+        caveats: List[Dict[str, Any]] = [dedup_caveat]
+        caveats.append(self._caveat(CAVEAT_NET_OF_OFFSETS, NET_NOTE))
         if info.status == "empty":
-            notices.append(f"Table {info.id} is EMPTY upstream (0 rows).")
+            caveats.append(
+                self._caveat(
+                    CAVEAT_TABLE_EMPTY,
+                    f"Table {info.id} is EMPTY upstream (0 rows).",
+                )
+            )
+        if "Location" in self._default_out_fields(info, include_dup):
+            caveats.append(
+                self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE)
+            )
 
-        text = self._format_rows_response(
+        text, structured = self._format_rows_response(
             info,
             records,
             where=where,
@@ -2044,7 +2542,10 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             requested=requested,
             total_count=total,
             heading=f"## query_checkbook -- table {info.id} ({info.label})",
-            notices=notices or None,
+            caveats=caveats,
+            dedup_caveat=dedup_caveat,
+            args=args,
+            offset=offset,
             pubdate=await self._pubdate_snapshot(info.id),
         )
         remaining = None if total is None else total - (offset + len(records))
@@ -2054,7 +2555,502 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 f"again with offset={offset + len(records)} (same "
                 f"where/order_by) for the next page."
             )
-        return text
+        return text, structured
+
+    # ── Structured output ─────────────────────────────────────────────
+    #
+    # Declaring an `outputSchema` is a commitment, not a hint: the MCP
+    # spec says servers MUST return structured results that conform to
+    # it, and clients may validate and reject. Every constraint below is
+    # therefore checked against what this dataset can actually contain.
+    #
+    # The rules this schema is built to, each of which is a way a finance
+    # server can be confidently wrong:
+    #
+    #  * No field is ever called a bare `total`. Every figure here is NET
+    #    of offsetting entries, so the name carries it: `net_sum`,
+    #    `net_amount`. A number labelled "total spending" that is really a
+    #    net figure is this server's version of a silently wrong unit.
+    #  * `duplicate_filter` is REQUIRED in the query block, not an
+    #    optional caveat. It is the single difference between this
+    #    server's numbers and the published dashboard's.
+    #  * Fiscal period is a NUMBER 1-16 plus an `is_adjustment_period`
+    #    boolean. No month name is emitted anywhere, and none can be
+    #    inferred -- periods 13-16 are year-end adjustments.
+    #  * No `minimum: 0` on any amount. Single rows in this dataset run
+    #    from about -$749M to +$743M, so a non-negative constraint would
+    #    make the server violate its own schema on real data.
+    #  * Vendor rows carry the RAW stored spelling, one row per distinct
+    #    spelling, never merged. Merging is a judgement call that belongs
+    #    to the caller.
+    #  * `total_count` is null where the tool does not paginate and 0
+    #    where a query ran and matched nothing. null means "unmeasured",
+    #    0 means "a known, complete count of zero"; conflating them makes
+    #    a complete answer look like a sample.
+    #
+    # Emitted inline rather than via $ref, so each schema is
+    # self-contained and no client has to resolve references.
+
+    _CAVEATS_SCHEMA = {
+        "type": "array",
+        "description": (
+            "Machine-readable qualifications on the result. Present so a "
+            "caller can branch on `code` instead of parsing the prose "
+            "rendering. An empty array means the result is unqualified. "
+            "Codes: NET_OF_OFFSETS, DUPLICATES_FILTERED, "
+            "DUPLICATES_INCLUDED, ADJUSTMENT_PERIOD, "
+            "VENDOR_SPELLING_VARIANTS, KNOWN_GAP, LOCATION_IS_BILLING, "
+            "PERIOD_SCALE, TABLE_EMPTY, REFUNDS_LABEL, TRUNCATED."
+        ),
+        "items": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Stable identifier for the caveat.",
+                },
+                "message": {
+                    "type": "string",
+                    "description": (
+                        "The human-readable form of this caveat -- the "
+                        "same string rendered in the text response."
+                    ),
+                },
+                "duplicate_filter": {
+                    "type": "string",
+                    "enum": ["excluded", "included"],
+                    "description": (
+                        "On DUPLICATES_* caveats: whether the default "
+                        "Duplicate='No' filter was applied."
+                    ),
+                },
+                "gap": {
+                    "type": "string",
+                    "description": (
+                        "On KNOWN_GAP: which documented gap this is "
+                        "(revenue_fy2024, fy2026_partial, "
+                        "procurement_fy2025_outlier)."
+                    ),
+                },
+                "periods": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": (
+                        "On ADJUSTMENT_PERIOD: the year-end adjustment "
+                        "periods (13-16) present in this result."
+                    ),
+                },
+                "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Affected row/spelling count, if any.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "The cap that was reached, if any.",
+                },
+            },
+        },
+    }
+
+    # Shared by every schema below: what was asked, and under which
+    # dataset semantics. `duplicate_filter` and `table` are required
+    # because a figure cannot be interpreted without them.
+    _QUERY_SCHEMA = {
+        "type": "object",
+        "required": ["table", "duplicate_filter", "where"],
+        "description": (
+            "What was asked. Tools add their own fields, so extra "
+            "properties are allowed."
+        ),
+        "properties": {
+            "table": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5,
+                "description": "Open Checkbook table id.",
+            },
+            "table_name": {"type": "string"},
+            "duplicate_filter": {
+                "type": "string",
+                "enum": ["excluded", "included"],
+                "description": (
+                    "Whether the default Duplicate='No' filter was "
+                    "applied. REQUIRED: it is the single reason this "
+                    "server's totals differ from the public dashboard's, "
+                    "so a consumer must always be able to tell."
+                ),
+            },
+            "where": {
+                "type": ["string", "null"],
+                "description": (
+                    "The EFFECTIVE WHERE clause, including the injected "
+                    "duplicate filter."
+                ),
+            },
+            "fiscal_year": {
+                "type": ["string", "null"],
+                "description": "Stored as a string upstream, e.g. '2025'.",
+            },
+            "fiscal_period": {
+                "type": ["integer", "null"],
+                "minimum": 1,
+                "maximum": 16,
+                "description": (
+                    "Fiscal period 1-16. NOT a calendar month: 13-16 are "
+                    "year-end adjustment periods. No month name is "
+                    "emitted for this value and none can be inferred."
+                ),
+            },
+            "is_adjustment_period": {
+                "type": ["boolean", "null"],
+                "description": (
+                    "True when `fiscal_period` is one of 13-16. Null when "
+                    "no period filter was applied."
+                ),
+            },
+            "limit": {"type": ["integer", "null"], "minimum": 0},
+            "offset": {"type": ["integer", "null"], "minimum": 0},
+            "data_snapshot": {
+                "type": ["string", "null"],
+                "description": (
+                    "The ETL PubDate: when this data was last "
+                    "republished. Provenance only -- it is identical on "
+                    "every row and is NOT a transaction date."
+                ),
+            },
+        },
+    }
+
+    # get_line_items and query_checkbook, which both render through
+    # _format_rows_response.
+    ROWS_OUTPUT_SCHEMA = {
+        "type": "object",
+        "required": ["query", "summary", "rows", "caveats"],
+        "additionalProperties": False,
+        "properties": {
+            "query": _QUERY_SCHEMA,
+            "summary": {
+                "type": "object",
+                "required": ["returned", "total_count", "truncated"],
+                "properties": {
+                    "returned": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Records in `rows`.",
+                    },
+                    "total_count": {
+                        "type": ["integer", "null"],
+                        "minimum": 0,
+                        "description": (
+                            "Records matching the filter -- the answer to "
+                            "'how many?'. 0 means a known, complete count "
+                            "of zero; null means the count could not be "
+                            "measured, NOT that nothing matched."
+                        ),
+                    },
+                    "truncated": {
+                        "type": "boolean",
+                        "description": (
+                            "True when total_count exceeds returned, so "
+                            "`rows` is a SAMPLE and must not be summed or "
+                            "counted as if complete."
+                        ),
+                    },
+                },
+            },
+            "rows": {
+                "type": "array",
+                "description": (
+                    "Raw field values as stored. Coded fields are split "
+                    "into <field>_code / <field>_label. Amounts are NET "
+                    "and may be negative. Location, where present, is "
+                    "the vendor's BILLING city/state -- see "
+                    "billing_city/billing_state -- and supports no "
+                    "geographic analysis."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "Amount": {
+                            "type": ["number", "null"],
+                            "description": (
+                                "NET amount. Negative values are real "
+                                "(offsetting entries), so no minimum is "
+                                "declared."
+                            ),
+                        },
+                        "Month_Fiscal_Period": {
+                            "type": ["integer", "null"],
+                            "minimum": 1,
+                            "maximum": 16,
+                        },
+                        "billing_city": {
+                            "type": ["string", "null"],
+                            "description": (
+                                "Vendor's billing city, parsed from "
+                                "Location. NOT a Municipality of "
+                                "Anchorage location."
+                            ),
+                        },
+                        "billing_state": {
+                            "type": ["string", "null"],
+                            "description": (
+                                "Vendor's billing state, parsed from "
+                                "Location. NOT a Municipality of "
+                                "Anchorage location."
+                            ),
+                        },
+                    },
+                },
+            },
+            "caveats": _CAVEATS_SCHEMA,
+        },
+    }
+
+    # spending_stats.
+    STATS_OUTPUT_SCHEMA = {
+        "type": "object",
+        "required": ["query", "summary", "rows", "caveats"],
+        "additionalProperties": False,
+        "properties": {
+            "query": _QUERY_SCHEMA,
+            "summary": {
+                "type": "object",
+                "required": ["stat_type", "measure", "group_by", "groups"],
+                "properties": {
+                    "stat_type": {
+                        "type": "string",
+                        "description": (
+                            "Which statistic `value` holds. In the "
+                            "structured half rather than only in the "
+                            "prose, so a caller can never read a "
+                            "percentile as a sum."
+                        ),
+                    },
+                    "measure": {
+                        "type": "string",
+                        "description": (
+                            "The dollar field aggregated. There is no "
+                            "universal 'Amount': table 2's measures are "
+                            "Total_Payroll_Cost / Salaries_Wages / "
+                            "Overtime / Liabilities_Benefits."
+                        ),
+                    },
+                    "percentile": {
+                        "type": ["number", "null"],
+                        "description": "Set only for percentile_cont.",
+                    },
+                    "group_by": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Empty array means an ungrouped total.",
+                    },
+                    "groups": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Number of groups in `rows`.",
+                    },
+                    "truncated": {
+                        "type": "boolean",
+                        "description": (
+                            "True when the group list hit the limit, so "
+                            "`rows` is not the whole grouping."
+                        ),
+                    },
+                },
+            },
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["group", "value", "row_count"],
+                    "properties": {
+                        "group": {
+                            "type": "object",
+                            "description": (
+                                "The grouping field values for this row, "
+                                "keyed by field name. Empty for an "
+                                "ungrouped total. Values are raw and are "
+                                "not necessarily strings."
+                            ),
+                            "additionalProperties": {
+                                "type": ["string", "number", "boolean", "null"]
+                            },
+                        },
+                        "value": {
+                            "type": ["number", "null"],
+                            "description": (
+                                "The statistic named by summary.stat_type, "
+                                "over summary.measure. For sum/avg/min/max "
+                                "this is a NET dollar figure and CAN be "
+                                "negative -- no minimum is declared. Never "
+                                "labelled a 'total'."
+                            ),
+                        },
+                        "row_count": {
+                            "type": ["integer", "null"],
+                            "minimum": 0,
+                            "description": (
+                                "Underlying LINE ITEMS in this group -- "
+                                "not distinct vendors, transactions or "
+                                "entities."
+                            ),
+                        },
+                    },
+                },
+            },
+            "caveats": _CAVEATS_SCHEMA,
+        },
+    }
+
+    # search_by_vendor and top_vendors: one row per DISTINCT stored
+    # spelling, never merged.
+    VENDOR_OUTPUT_SCHEMA = {
+        "type": "object",
+        "required": ["query", "summary", "rows", "caveats"],
+        "additionalProperties": False,
+        "properties": {
+            "query": _QUERY_SCHEMA,
+            "summary": {
+                "type": "object",
+                "required": ["entity_field", "spellings", "measure"],
+                "properties": {
+                    "entity_field": {
+                        "type": "string",
+                        "description": (
+                            "The payee field for this table -- "
+                            "Vendor_Name, or Customer_Business_Name on "
+                            "Revenue."
+                        ),
+                    },
+                    "measure": {"type": "string"},
+                    "spellings": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": (
+                            "Distinct stored spellings in `rows`. This is "
+                            "a spelling count, NOT a count of distinct "
+                            "business entities: one entity can appear "
+                            "under several spellings."
+                        ),
+                    },
+                    "combined_net_sum": {
+                        "type": ["number", "null"],
+                        "description": (
+                            "Net sum across the spellings SHOWN. May be "
+                            "negative. Not authoritative for an entity "
+                            "unless every one of its spellings is present."
+                        ),
+                    },
+                    "combined_row_count": {
+                        "type": ["integer", "null"],
+                        "minimum": 0,
+                        "description": (
+                            "Line items across the spellings shown -- not "
+                            "distinct transactions or vendors."
+                        ),
+                    },
+                    "truncated": {
+                        "type": "boolean",
+                        "description": (
+                            "True when the spelling list hit the limit, so "
+                            "the combined figures cover only what is shown."
+                        ),
+                    },
+                },
+            },
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["name", "net_sum", "row_count"],
+                    "properties": {
+                        "rank": {"type": ["integer", "null"], "minimum": 1},
+                        "name": {
+                            "type": ["string", "null"],
+                            "description": (
+                                "The RAW stored spelling, exactly as held "
+                                "upstream. Never normalized or merged with "
+                                "another spelling -- that is the caller's "
+                                "judgement call, not the server's."
+                            ),
+                        },
+                        "net_sum": {
+                            "type": ["number", "null"],
+                            "description": (
+                                "NET sum for THIS spelling alone. May be "
+                                "negative, so no minimum is declared. May "
+                                "undercount the entity."
+                            ),
+                        },
+                        "row_count": {
+                            "type": ["integer", "null"],
+                            "minimum": 0,
+                            "description": (
+                                "Line items for this spelling -- not "
+                                "distinct transactions."
+                            ),
+                        },
+                    },
+                },
+            },
+            "caveats": _CAVEATS_SCHEMA,
+        },
+    }
+
+    # list_field_values.
+    FIELD_VALUES_OUTPUT_SCHEMA = {
+        "type": "object",
+        "required": ["query", "summary", "values", "caveats"],
+        "additionalProperties": False,
+        "properties": {
+            "query": _QUERY_SCHEMA,
+            "summary": {
+                "type": "object",
+                "required": ["field", "returned", "more_available"],
+                "properties": {
+                    "field": {"type": "string"},
+                    "returned": {"type": "integer", "minimum": 0},
+                    "more_available": {
+                        "type": "boolean",
+                        "description": (
+                            "True when more distinct values exist past the "
+                            "limit, so `values` is not the full domain."
+                        ),
+                    },
+                },
+            },
+            "values": {
+                "type": "array",
+                "description": (
+                    "Distinct stored values. Coded fields carry both the "
+                    "code and the label; everything else carries `value` "
+                    "alone, raw and not necessarily a string."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "value": {
+                            "type": ["string", "number", "boolean", "null"]
+                        },
+                        "code": {"type": ["string", "null"]},
+                        "label": {"type": ["string", "null"]},
+                        "is_adjustment_period": {
+                            "type": ["boolean", "null"],
+                            "description": (
+                                "For Month_Fiscal_Period: true for 13-16, "
+                                "the year-end adjustment periods."
+                            ),
+                        },
+                    },
+                },
+            },
+            "caveats": _CAVEATS_SCHEMA,
+        },
+    }
 
     # ── Tool definitions ──────────────────────────────────────────────
 
@@ -2280,6 +3276,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     },
                     "required": ["table"],
                 },
+                output_schema=self.STATS_OUTPUT_SCHEMA,
                 annotations=annotations,
             ),
             ToolDefinition(
@@ -2316,6 +3313,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     },
                     "required": ["name_contains"],
                 },
+                output_schema=self.VENDOR_OUTPUT_SCHEMA,
                 annotations=annotations,
             ),
             ToolDefinition(
@@ -2345,6 +3343,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     },
                     "required": [],
                 },
+                output_schema=self.VENDOR_OUTPUT_SCHEMA,
                 annotations=annotations,
             ),
             ToolDefinition(
@@ -2418,6 +3417,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     },
                     "required": ["table"],
                 },
+                output_schema=self.ROWS_OUTPUT_SCHEMA,
                 annotations=annotations,
             ),
             ToolDefinition(
@@ -2449,6 +3449,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     },
                     "required": ["table", "field"],
                 },
+                output_schema=self.FIELD_VALUES_OUTPUT_SCHEMA,
                 annotations=annotations,
             ),
             ToolDefinition(
@@ -2502,6 +3503,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     },
                     "required": ["table", "where"],
                 },
+                output_schema=self.ROWS_OUTPUT_SCHEMA,
                 annotations=annotations,
             ),
         ]
@@ -2542,10 +3544,18 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 error_message=f"Unknown tool: {tool_name}",
             )
         try:
-            text = await handler(arguments)
+            result = await handler(arguments)
+            # Tools that declare an outputSchema return (text, structured);
+            # the two discovery tools return text alone. Unpacking here
+            # rather than in each handler keeps the split in one place.
+            if isinstance(result, tuple):
+                text, structured = result
+            else:
+                text, structured = result, None
             return ToolResult(
                 content=[{"type": "text", "text": self._with_retrieved_footer(text)}],
                 success=True,
+                structured_content=structured,
             )
         except ToolInputError as e:
             # The caller asked for something invalid. That is not a
