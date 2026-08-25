@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import sys
-import time
 import uuid
 from pathlib import Path
 
@@ -19,9 +18,9 @@ import yaml
 from aiohttp import web
 
 from core.logging_utils import configure_json_logging
-from core.mcp_server import MCPServer
-from core.plugin_manager import PluginManager
 from core.validators import get_logging_config
+from server import http_handler
+from server.http_handler import UniversalHTTPHandler
 
 logger = logging.getLogger(__name__)
 
@@ -37,121 +36,90 @@ configure_json_logging(
     pretty=True,  # Pretty-print JSON for better local readability
 )
 
-# Global server instance
-_plugin_manager = None
-_mcp_server = None
+# The single request handler, identical to the one the Lambda adapter
+# uses. Deliberately NOT a local PluginManager/MCPServer pair: this
+# script used to call MCPServer.handle_http_request directly, which
+# skipped the Origin allowlist, the MCP-Protocol-Version check and
+# path/method validation, so local dev could not reproduce -- or catch a
+# regression in -- any of them.
+_handler = UniversalHTTPHandler()
 
 
 async def init_server():
-    """Initialize server on startup."""
-    global _plugin_manager, _mcp_server
+    """Warm the handler's plugins so startup failures surface immediately.
 
+    UniversalHTTPHandler initializes lazily on first request; doing it
+    here instead means a bad config fails at launch rather than on the
+    first curl, and lets us print what actually loaded.
+    """
     print("🚀 Initializing OpenContext MCP Server locally...")
 
-    # Initialize Plugin Manager
-    _plugin_manager = PluginManager(config)
-    await _plugin_manager.load_plugins()
+    await http_handler._initialize_server()
 
-    # Initialize MCP Server
-    _mcp_server = MCPServer(_plugin_manager)
-
+    plugin_manager = http_handler._plugin_manager
     print("✅ Server initialized successfully")
-    print(f"Loaded plugins: {list(_plugin_manager.plugins.keys())}")
-    print(f"Available tools: {len(_plugin_manager.get_all_tools())}")
+    print(f"Loaded plugins: {list(plugin_manager.plugins.keys())}")
+    print(f"Available tools: {len(plugin_manager.get_all_tools())}")
 
 
 async def handle_mcp_request(request):
-    """Handle MCP JSON-RPC request."""
-    start_time = time.perf_counter()
+    """Adapt an aiohttp request onto UniversalHTTPHandler.
+
+    Thin on purpose -- the mirror of server/adapters/aws_lambda.py. All
+    protocol behaviour (Origin allowlist, MCP-Protocol-Version check,
+    path/method validation, session IDs, CORS, request logging) lives in
+    the handler, so local dev exercises exactly what prod runs.
+    """
+    body = await request.text()
+
+    # HTTP header names are case-insensitive; the handler reads them
+    # lowercased, the same normalization the Lambda adapter applies.
+    headers = {k.lower(): v for k, v in request.headers.items()}
+
+    # Local-only convenience: surface the tool and its arguments up front.
+    # The handler logs the request too, but not at this granularity, and
+    # seeing the arguments is most of the value of running locally.
     try:
-        body = await request.text()
-        headers = dict(request.headers)
-
-        # Extract session ID from headers for logging
-        session_id = headers.get("mcp-session-id") or headers.get("Mcp-Session-Id")
-
-        # Parse JSON to detect method and extract details for logging
-        try:
-            request_json = json.loads(body)
-            method = request_json.get("method", "unknown")
-            tool_name = None
-            tool_args = None
-
-            if method == "tools/call":
-                params = request_json.get("params", {})
-                tool_name = params.get("name")
-                tool_args = params.get("arguments", {})
-        except (json.JSONDecodeError, AttributeError):
-            method = "unknown"
-            tool_name = None
-            tool_args = None
-
-        # Log incoming request details
-        logger.info(
-            "Incoming MCP request",
-            extra={
-                "session_id": session_id,
-                "method": method,
-                "tool_name": tool_name,
-                "tool_arguments": tool_args if tool_args else None,
-            },
-        )
-
-        # Check if this is an initialize request
-        is_initialize = method == "initialize"
-        session_id_to_return = None
-
-        if is_initialize:
-            session_id_to_return = str(uuid.uuid4())
+        request_json = json.loads(body)
+        if request_json.get("method") == "tools/call":
+            params = request_json.get("params", {})
             logger.info(
-                f"Initialize request detected, generating session ID: {session_id_to_return}"
+                "Incoming tool call",
+                extra={
+                    "method": "tools/call",
+                    "tool_name": params.get("name"),
+                    "tool_arguments": params.get("arguments") or None,
+                },
             )
+    except (json.JSONDecodeError, AttributeError):
+        pass
 
-        # Use the same handler as Lambda
-        response = await _mcp_server.handle_http_request(body, headers)
+    status_code, response_headers, response_body = await _handler.handle_request(
+        method=request.method,
+        path=request.path,
+        body=body,
+        headers=headers,
+        request_id=str(uuid.uuid4()),
+    )
 
-        # Add session ID to response headers if this was an initialize request
-        response_headers = dict(response.get("headers", {}))
-        if session_id_to_return:
-            response_headers["Mcp-Session-Id"] = session_id_to_return
+    return web.Response(
+        text=response_body,
+        status=status_code,
+        headers=response_headers,
+    )
 
-        # Calculate and log response time
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        logger.info(
-            "MCP request processed",
-            extra={
-                "session_id": session_id_to_return or session_id,
-                "method": method,
-                "tool_name": tool_name,
-                "duration_ms": round(duration_ms, 2),
-                "status_code": response.get("statusCode", 200),
-            },
-        )
 
-        return web.Response(
-            text=response.get("body", "{}"),
-            status=response.get("statusCode", 200),
-            headers=response_headers,
-        )
-
-    except Exception as e:
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        logger.error(
-            f"Error processing MCP request: {e}",
-            extra={"duration_ms": round(duration_ms, 2)},
-            exc_info=True,
-        )
-        return web.Response(
-            text=json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32603, "message": str(e)},
-                }
-            ),
-            status=500,
-            headers={"Content-Type": "application/json"},
-        )
+async def handle_mcp_options(request):
+    """CORS preflight, delegated to the same handler as prod."""
+    status_code, response_headers, response_body = _handler.handle_options(
+        request_id=str(uuid.uuid4()),
+        request_origin=request.headers.get("Origin"),
+    )
+    return web.Response(
+        text=response_body,
+        status=status_code,
+        headers=response_headers,
+    )
 
 
 async def start_server():
@@ -160,6 +128,12 @@ async def start_server():
 
     app = web.Application()
     app.router.add_post("/mcp", handle_mcp_request)
+    app.router.add_options("/mcp", handle_mcp_options)
+    # The hardened GCC route shares this handler in prod; serving it here
+    # too keeps the local surface identical. Its API-key requirement is
+    # enforced at API Gateway, so locally it behaves like /mcp.
+    app.router.add_post("/mcp-gcc", handle_mcp_request)
+    app.router.add_options("/mcp-gcc", handle_mcp_options)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -221,7 +195,8 @@ async def start_server():
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         print("\n👋 Shutting down...")
-        await _plugin_manager.shutdown()
+        if http_handler._plugin_manager is not None:
+            await http_handler._plugin_manager.shutdown()
 
 
 if __name__ == "__main__":

@@ -10,7 +10,9 @@ uv sync                              # or: pip install -r requirements.txt
 
 # Run local MCP server (no Lambda needed)
 python3 scripts/local_server.py      # Serves on http://localhost:8000/mcp
-# Or: python3 local_server.py        # Alternate entry point, serves on / and /mcp
+# The only local entry point. It routes through UniversalHTTPHandler, the
+# same handler the Lambda adapter uses, so Origin/protocol-version/path
+# checks behave locally exactly as they do in prod.
 
 # Validate config
 python3 -c "from core.validators import load_and_validate_config; load_and_validate_config('config.yaml')"
@@ -43,7 +45,7 @@ cd client && make build
 **Request flow:**
 ```
 Claude (stdio) → Go client (client/) or stdio_bridge.py → HTTP POST /mcp
-  → Lambda (server/adapters/aws_lambda.py) or local_server.py
+  → Lambda (server/adapters/aws_lambda.py) or scripts/local_server.py
   → server/http_handler.py → core/mcp_server.py (JSON-RPC 2.0)
   → core/plugin_manager.py → Plugin → External API
 ```
@@ -53,7 +55,7 @@ Claude (stdio) → Go client (client/) or stdio_bridge.py → HTTP POST /mcp
 - `core/plugin_manager.py` — Discovers plugins by scanning `plugins/` and `custom_plugins/` for `plugin.py` files. Registers tools with `pluginname__toolname` prefix. Routes `tools/call` to the correct plugin.
 - `core/mcp_server.py` — Handles MCP JSON-RPC methods: `initialize`, `tools/list`, `tools/call`, `ping`
 - `core/validators.py` — Loads config from `config.yaml` (local) or `OPENCONTEXT_CONFIG` env var (Lambda). Enforces single-plugin rule.
-- `server/adapters/aws_lambda.py` — AWS Lambda entry point (handler: `server.adapters.aws_lambda.lambda_handler`). Also `server/lambda_handler.py` as legacy entry point.
+- `server/adapters/aws_lambda.py` — the AWS Lambda entry point (handler: `server.adapters.aws_lambda.lambda_handler`), and the only one. It is a thin adapter onto `UniversalHTTPHandler`; `scripts/local_server.py` is the aiohttp mirror of it.
 - `server/http_handler.py` — Cloud-agnostic HTTP handler shared by Lambda and local server
 - `stdio_bridge.py` — Python stdio-to-HTTP bridge for connecting Claude Desktop/Code to the local server (alternative to Go client)
 
