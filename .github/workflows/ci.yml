@@ -1,0 +1,149 @@
+---
+# CI for the Anchorage Open Checkbook MCP server.
+#
+# Nothing validated this repo before: CLAUDE.md described a workflow at this
+# path that had never existed in this fork (the paragraph came along from
+# upstream OpenContext), so every push was checked only by whatever the
+# author happened to run locally.
+#
+# Each job below is one that was verified to pass on the tree that
+# introduced it, so this arrives green rather than red.
+#
+# DELIBERATELY ABSENT: `ruff format --check`. This repo is hand-wrapped at
+# roughly 79 columns and the formatter disagrees with 15 existing files;
+# enforcing it would demand a thousand-line reformat that would bury real
+# diffs in whitespace and destroy `git blame` across the plugin. `ruff
+# check` (the linter) IS enforced. If you are tempted to add the formatter,
+# that reformat is the thing to weigh -- not the one-line workflow change.
+
+name: CI
+
+"on":
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+# A newer push to the same branch supersedes an in-flight run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The version AWS Lambda runs, and the one scripts/deploy.sh installs
+  # wheels for. CI tests what production executes.
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+
+      # Scoped to the same four directories as .pre-commit-config.yaml.
+      # scripts/ is deliberately outside it: those entry points must set
+      # sys.path before importing from core/, which is an unavoidable E402.
+      - name: ruff check
+        run: ruff check core/ plugins/ server/ tests/
+
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+
+      # config.yaml is gitignored, so CI runs the suite exactly as a fresh
+      # clone would. That is intentional: it proves the tests do not depend
+      # on a file a new contributor will not have. One test
+      # (TestConfigCopiesInSync) skips here by design -- the drift it guards
+      # against is local, between the tracked config and the untracked copy
+      # deploy.sh actually ships, which CI cannot observe.
+      #
+      # The live acceptance tests skip unless CHECKBOOK_LIVE_TESTS=1; CI
+      # never calls the MOA service, so a run is not gated on a third party
+      # being up.
+      - name: pytest with coverage
+        run: |
+          pytest tests/ -n auto \
+            --cov=core --cov=plugins --cov=server \
+            --cov-report=term-missing \
+            --cov-fail-under=80
+
+  security:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip && pip install pip-audit
+
+      # requirements.txt only -- that is what ships inside the Lambda
+      # package and is therefore the surface that is actually exposed. Test
+      # and tooling dependencies never reach production.
+      - name: Audit runtime dependencies
+        run: pip-audit -r requirements.txt --progress-spinner off
+
+  go-client:
+    name: go client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache-dependency-path: client/go.mod
+
+      # The stdio bridge Claude Desktop/Code runs. Its tests use
+      # httptest.NewServer, so they need no network and no external module.
+      - name: go vet
+        working-directory: client
+        run: go vet ./...
+
+      - name: go test
+        working-directory: client
+        run: go test ./...
+
+  terraform:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      # Formatting only. `terraform validate` needs `terraform init`, which
+      # needs credentials for the S3 backend, and CI has none by design --
+      # nothing here should be able to read or touch deployment state.
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive terraform/

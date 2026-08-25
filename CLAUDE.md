@@ -98,4 +98,16 @@ Caveat codes are stable and callers may branch on them: `NET_OF_OFFSETS`, `DUPLI
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs ruff lint/format, pip-audit, pytest with coverage, and Go tests on push to main/develop and on PRs.
+GitHub Actions (`.github/workflows/ci.yml`) runs on push to `main`/`develop` and on PRs:
+
+| job | what it runs |
+|---|---|
+| `lint` | `ruff check core/ plugins/ server/ tests/` |
+| `test` | `pytest -n auto` with coverage, gated at `--cov-fail-under=80` |
+| `security` | `pip-audit -r requirements.txt` (the runtime surface that ships in the Lambda) |
+| `go-client` | `go vet` + `go test` in `client/` |
+| `terraform` | `terraform fmt -check -recursive terraform/` |
+
+Two deliberate omissions. **`ruff format` is not enforced** — this repo is hand-wrapped at ~79 columns and the formatter disagrees with 15 existing files, so gating on it would demand a thousand-line reformat; the linter is enforced. **`terraform validate` is not run** — it requires `terraform init` against the S3 backend, and CI holds no AWS credentials by design.
+
+CI runs without `config.yaml`, which is gitignored, so the suite must never depend on it. `tests/test_deployment_config.py::TestConfigCopiesInSync` skips there by design: the drift it guards against is local, between the tracked config and the untracked copy `deploy.sh` ships. The live acceptance tests skip unless `CHECKBOOK_LIVE_TESTS=1`, so a CI run is never gated on the MOA service being up.
