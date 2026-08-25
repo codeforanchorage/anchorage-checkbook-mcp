@@ -24,6 +24,10 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
     "pytest-xdist>=3.0.0",
+    # A declared outputSchema is binding -- the MCP spec says servers MUST
+    # return conforming structured results -- so the tests validate real
+    # tool output against the real schema rather than eyeballing shapes.
+    "jsonschema>=4.0.0",
     "ruff>=0.1.0",
     "pip-audit>=2.0.0",
 ]

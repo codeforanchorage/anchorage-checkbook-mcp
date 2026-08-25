@@ -346,15 +346,23 @@ class TestCheckbookWhereValidator:
 
 class TestTrapLayer:
     def test_dedup_injected_by_default(self, plugin):
-        clause, warning = plugin._dedup_parts({})
+        clause, caveat = plugin._dedup_parts({})
         assert clause == "Duplicate = 'No'"
-        assert warning is None
+        # A caveat is emitted even on the SAFE path: the filter state is
+        # the one difference between this server's numbers and the public
+        # dashboard's, so silence would read as "no filtering happened".
+        assert caveat["code"] == "DUPLICATES_FILTERED"
+        assert caveat["duplicate_filter"] == "excluded"
+        assert "dashboard" in caveat["message"]
 
     def test_include_duplicates_warns(self, plugin):
-        clause, warning = plugin._dedup_parts({"include_duplicates": True})
+        clause, caveat = plugin._dedup_parts({"include_duplicates": True})
         assert clause is None
-        assert warning == DUPLICATE_WARNING
-        assert "FY2023 AND FY2026" in warning  # never a one-year filter
+        assert caveat["code"] == "DUPLICATES_INCLUDED"
+        assert caveat["duplicate_filter"] == "included"
+        assert caveat["message"] == DUPLICATE_WARNING
+        # never a one-year filter
+        assert "FY2023 AND FY2026" in caveat["message"]
 
     def test_pubdate_filter_rejected_with_redirect(self, plugin):
         with pytest.raises(ValueError) as exc:
@@ -415,18 +423,28 @@ class TestTrapLayer:
         assert plugin._expand_code_labels(records, TABLES[3]) is records
 
     def test_fiscal_notices(self, plugin):
+        def messages(caveats):
+            return [c["message"] for c in caveats]
+
         # Unfiltered revenue: FY2024 gap + FY2026 partial.
         notes = plugin._fiscal_notices(TABLES[4], None)
-        assert any("FY2024" in n for n in notes)
-        assert any("FY2026 is partial" in n for n in notes)
+        assert any("FY2024" in n for n in messages(notes))
+        assert any("FY2026 is partial" in n for n in messages(notes))
+        # Every gap is machine-readable, with which gap it is.
+        assert {c["code"] for c in notes} == {"KNOWN_GAP"}
+        assert "revenue_fy2024" in {c["gap"] for c in notes}
         # Revenue pinned to 2023: silent.
         assert plugin._fiscal_notices(TABLES[4], ["2023"]) == []
         # Procurement touching 2025: outlier flag.
         assert any(
-            "encumbrance" in n for n in plugin._fiscal_notices(TABLES[3], ["2025"])
+            "encumbrance" in n
+            for n in messages(plugin._fiscal_notices(TABLES[3], ["2025"]))
         )
         # Any table touching 2026: partial-year note.
-        assert any("FY2026" in n for n in plugin._fiscal_notices(TABLES[0], ["2026"]))
+        assert any(
+            "FY2026" in n
+            for n in messages(plugin._fiscal_notices(TABLES[0], ["2026"]))
+        )
         assert plugin._fiscal_notices(TABLES[0], ["2022"]) == []
 
 
@@ -484,7 +502,7 @@ class TestComposition:
 
     def test_bookended_truncation(self, plugin):
         records = [{"Vendor_Name": "A", "Amount": 5}]
-        text = plugin._format_rows_response(
+        text, structured = plugin._format_rows_response(
             TABLES[0],
             records,
             where="(Duplicate = 'No')",
@@ -494,6 +512,11 @@ class TestComposition:
             pubdate="2026-08-02",
         )
         assert text.count("**TRUNCATED:**") == 2  # top AND bottom
+        # The same warning reaches a caller that reads only the
+        # structured half -- otherwise `rows` looks complete.
+        assert structured["summary"]["truncated"] is True
+        assert structured["summary"]["total_count"] == 100
+        assert any(c["code"] == "TRUNCATED" for c in structured["caveats"])
         assert "showing 1 of 100 matching rows" in text
         assert "TOTAL rows matching the filter: 100" in text
         assert "limit=1 (requested 5000, clamped)" in text

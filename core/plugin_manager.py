@@ -287,6 +287,8 @@ class PluginManager:
                 # which is an identifier and reads poorly in a picker.
                 if tool_def.title:
                     tool_dict["title"] = tool_def.title
+                if tool_def.output_schema:
+                    tool_dict["outputSchema"] = tool_def.output_schema
                 if tool_def.annotations:
                     tool_dict["annotations"] = tool_def.annotations
                 tools.append(tool_dict)

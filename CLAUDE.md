@@ -83,6 +83,19 @@ Two AWS sizing values are read from `config.yaml` in preference to `terraform/aw
 | Lambda (`lambda_timeout`) | 28s | self-terminates before the gateway gives up |
 | Plugin HTTP (`plugins.anchorage_checkbook.timeout`) | 20s | a hung upstream returns a readable tool error instead of the Lambda being killed mid-flight |
 
+## Structured output
+
+Six of the eight tools (`spending_stats`, `search_by_vendor`, `top_vendors`, `get_line_items`, `list_field_values`, `query_checkbook`) declare an MCP `outputSchema` and return `structuredContent` alongside the markdown. `list_tables` and `get_table_schema` deliberately do not — their value is the prose guidance, and a schema would commit them to a shape whose point is the narrative.
+
+A declared `outputSchema` is **binding**: the spec says servers MUST return conforming results. `tests/test_structured_output.py` validates real tool output against the real schema on the awkward branches, and `scripts/smoke_prod.py` re-checks it against the deployed server.
+
+Two invariants worth knowing before editing a tool:
+
+- **Build the structured half OUTSIDE any `if rows:` branch.** Every converted tool renders its markdown table inside a non-empty branch; building `structured` there too would mean a query that matched nothing advertises a schema and returns nothing — a conformance break invisible to happy-path tests, and zero-result queries are common here (a vendor spelling that does not exist, a fiscal year with no rows).
+- **Caveats come from ONE list.** `_caveat()` builds them; the text prints `_caveat_messages()` and the structured half emits the objects. A test asserts every structured caveat message appears in the text, so the two channels cannot drift.
+
+Caveat codes are stable and callers may branch on them: `NET_OF_OFFSETS`, `DUPLICATES_FILTERED`, `DUPLICATES_INCLUDED`, `ADJUSTMENT_PERIOD`, `VENDOR_SPELLING_VARIANTS`, `KNOWN_GAP`, `LOCATION_IS_BILLING`, `PERIOD_SCALE`, `TABLE_EMPTY`, `REFUNDS_LABEL`, `TRUNCATED`.
+
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`) runs ruff lint/format, pip-audit, pytest with coverage, and Go tests on push to main/develop and on PRs.
