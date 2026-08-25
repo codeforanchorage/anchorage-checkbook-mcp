@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from core.mcp_server import MCPServer
 from core.plugin_manager import PluginManager
-from core.interfaces import ToolResult
+from core.interfaces import ToolResult, UnknownToolError
 
 
 class TestInitialize:
@@ -310,8 +310,13 @@ class TestToolsCall:
         )
 
     @pytest.mark.asyncio
-    async def test_tools_call_raises_error_when_tool_name_missing(self):
-        """Test that tools/call raises error when tool name is missing."""
+    async def test_tools_call_missing_name_is_invalid_params(self):
+        """A CallToolRequest with no `name` never described a valid call.
+
+        The tools spec calls this a request that fails to satisfy the
+        CallToolRequest schema: -32602, not the -32603 "Internal error"
+        this used to answer.
+        """
         plugin_manager = MagicMock(spec=PluginManager)
         server = MCPServer(plugin_manager)
 
@@ -329,8 +334,9 @@ class TestToolsCall:
 
         assert response is not None
         assert "error" in response
-        assert response["error"]["code"] == -32603
-        assert "Tool name is required" in response["error"]["data"]
+        assert response["error"]["code"] == -32602
+        assert response["error"]["message"] == "Invalid params"
+        assert "name" in response["error"]["data"]
 
     @pytest.mark.asyncio
     async def test_tools_call_handles_missing_arguments(self):
@@ -709,3 +715,144 @@ class TestUnknownMethodLogging:
         errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert errors, "a genuine fault must still log at ERROR"
         assert any(r.exc_info for r in errors), "a genuine fault keeps its traceback"
+
+
+class TestCallerErrorCodes:
+    """A -32603 plus a traceback is a claim that the server broke.
+
+    Spending one on a malformed request misleads the operator and tells
+    the model nothing it can act on. These pin the mapping in both
+    directions -- caller mistakes get their own codes, genuine faults
+    keep -32603.
+    """
+
+    @staticmethod
+    def _server(execute_side_effect=None):
+        plugin_manager = MagicMock(spec=PluginManager)
+        if execute_side_effect is not None:
+            plugin_manager.execute_tool = AsyncMock(side_effect=execute_side_effect)
+        else:
+            plugin_manager.execute_tool = AsyncMock(
+                return_value=ToolResult(content=[{"type": "text", "text": "ok"}], success=True)
+            )
+        return MCPServer(plugin_manager), plugin_manager
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_is_invalid_params_with_available_list(self):
+        server, _pm = self._server(
+            execute_side_effect=UnknownToolError("nope", "a__one, a__two")
+        )
+
+        response = await server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "nope", "arguments": {}},
+            }
+        )
+
+        assert response["error"]["code"] == -32602
+        # The message shape from the tools spec's own example.
+        assert response["error"]["message"] == "Unknown tool: nope"
+        # The available list rides in `data` so a model can self-correct.
+        assert "a__one" in response["error"]["data"]
+
+    @pytest.mark.asyncio
+    async def test_genuine_fault_still_returns_internal_error(self):
+        """The mapping must not quietly swallow real failures."""
+        server, _pm = self._server(
+            execute_side_effect=RuntimeError("the registry exploded")
+        )
+
+        response = await server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "a__one", "arguments": {}},
+            }
+        )
+
+        assert response["error"]["code"] == -32603
+        assert response["error"]["message"] == "Internal error"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_arguments", ["oops", 42, ["a"], True])
+    async def test_non_object_arguments_never_reaches_the_plugin(
+        self, bad_arguments
+    ):
+        """Verified against prod before the fix: a string `arguments`
+        reached the plugin, which called .get() on it, and the caller got
+        "'str' object has no attribute 'get'" back as a tool RESULT with
+        isError: true -- as though the tool had run and failed."""
+        server, plugin_manager = self._server()
+
+        response = await server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "a__one", "arguments": bad_arguments},
+            }
+        )
+
+        assert response["error"]["code"] == -32602
+        assert response["error"]["message"] == "Invalid params"
+        assert "object" in response["error"]["data"]
+        plugin_manager.execute_tool.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_omitting_arguments_entirely_is_valid_and_defaults_to_empty(
+        self,
+    ):
+        """`arguments` is optional in CallToolRequest; only a non-object
+        value is malformed."""
+        server, plugin_manager = self._server()
+
+        response = await server.handle_request(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "a__one"},
+            }
+        )
+
+        assert "error" not in response
+        plugin_manager.execute_tool.assert_called_once_with("a__one", {})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exc,expected_level",
+        [
+            (UnknownToolError("nope", "a__one"), logging.WARNING),
+            (RuntimeError("boom"), logging.ERROR),
+        ],
+    )
+    async def test_log_level_and_traceback_follow_the_mapping(
+        self, exc, expected_level, caplog
+    ):
+        server, _pm = self._server(execute_side_effect=exc)
+
+        with caplog.at_level(logging.DEBUG, logger="core.mcp_server"):
+            await server.handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "x", "arguments": {}},
+                }
+            )
+
+        records = [
+            r
+            for r in caplog.records
+            if r.getMessage().startswith("Error handling JSON-RPC request")
+        ]
+        assert records, "expected an error log record"
+        assert all(r.levelno == expected_level for r in records)
+        if expected_level == logging.WARNING:
+            assert not any(r.exc_info for r in records), "no traceback for caller errors"
+        else:
+            assert any(r.exc_info for r in records), "genuine faults keep the traceback"
