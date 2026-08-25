@@ -79,7 +79,7 @@ python scripts/local_server.py
 python -m pytest tests/test_anchorage_parcels_plugin.py -v
 
 # Live smoke test against the real MOA layer (network; skips offline)
-python scripts/smoke_parcels.py
+python scripts/smoke_parcels.py   # in the parcels fork; this fork does not carry it
 
 # Full MCP lifecycle over streamable HTTP (Git Bash; requires jq)
 ./scripts/test_streamable_http.sh http://localhost:8000/mcp \
