@@ -159,7 +159,7 @@ for label, headers, expect in [
     ("disallowed Origin is refused", {"Origin": "https://evil.example"}, 403),
     (
         "unknown protocol version is refused",
-        {"MCP-Protocol-Version": "2026-07-28"},
+        {"MCP-Protocol-Version": "1999-01-01"},
         400,
     ),
     (
@@ -173,6 +173,23 @@ for label, headers, expect in [
         check(label, status == expect, f"HTTP {status} (expected {expect})")
     except Exception as e:
         check(label, False, repr(e))
+
+try:
+    # A version served in neither era gets the 2026-07-28
+    # UnsupportedProtocolVersionError, not the bare -32600 this server
+    # used while it was legacy-only, and lists what it does serve so the
+    # client can retry with one of those.
+    status, body = raw(PING, headers={"MCP-Protocol-Version": "1999-01-01"})
+    err = (body or {}).get("error", {})
+    check(
+        "unknown protocol version -> -32022 with the supported list",
+        status == 400
+        and err.get("code") == -32022
+        and "2026-07-28" in err.get("data", {}).get("supported", []),
+        f"HTTP {status} code={err.get('code')}",
+    )
+except Exception as e:
+    check("unknown protocol version -> -32022 with the supported list", False, repr(e))
 
 try:
     status, _body = raw(None, method="GET")

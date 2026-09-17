@@ -53,7 +53,7 @@ Claude (stdio) → Go client (client/) or stdio_bridge.py → HTTP POST /mcp
 **Key modules:**
 - `core/interfaces.py` — Abstract bases: `MCPPlugin`, `DataPlugin`, plus `ToolDefinition`, `ToolResult`, `PluginType` enum
 - `core/plugin_manager.py` — Discovers plugins by scanning `plugins/` and `custom_plugins/` for `plugin.py` files. Registers tools with `pluginname__toolname` prefix. Routes `tools/call` to the correct plugin.
-- `core/mcp_server.py` — Handles MCP JSON-RPC methods: `initialize`, `tools/list`, `tools/call`, `ping`
+- `core/mcp_server.py` — Handles MCP JSON-RPC methods. Dual-era: legacy revisions (≤2025-11-25) get `initialize`, `tools/list`, `tools/call`, `ping` on a session; the modern revision (2026-07-28) is stateless — every request carries `_meta` (protocol version, client info/capabilities), `server/discover` replaces `initialize`, results carry `resultType` and cache hints, and the Streamable HTTP headers (`Mcp-Method`, `Mcp-Name`, `MCP-Protocol-Version`) must mirror the body or the request is a 400/-32020
 - `core/validators.py` — Loads config from `config.yaml` (local) or `OPENCONTEXT_CONFIG` env var (Lambda). Enforces single-plugin rule.
 - `server/adapters/aws_lambda.py` — the AWS Lambda entry point (handler: `server.adapters.aws_lambda.lambda_handler`), and the only one. It is a thin adapter onto `UniversalHTTPHandler`; `scripts/local_server.py` is the aiohttp mirror of it.
 - `server/http_handler.py` — Cloud-agnostic HTTP handler shared by Lambda and local server
@@ -95,6 +95,49 @@ Two invariants worth knowing before editing a tool:
 - **Caveats come from ONE list.** `_caveat()` builds them; the text prints `_caveat_messages()` and the structured half emits the objects. A test asserts every structured caveat message appears in the text, so the two channels cannot drift.
 
 Caveat codes are stable and callers may branch on them: `NET_OF_OFFSETS`, `DUPLICATES_FILTERED`, `DUPLICATES_INCLUDED`, `ADJUSTMENT_PERIOD`, `VENDOR_SPELLING_VARIANTS`, `KNOWN_GAP`, `LOCATION_IS_BILLING`, `PERIOD_SCALE`, `TABLE_EMPTY`, `REFUNDS_LABEL`, `TRUNCATED`.
+
+## MCP conformance invariants
+
+These are contracts, not preferences — each is enforced by a test. If you change
+the behaviour, change the test deliberately rather than deleting it.
+
+- **Protocol negotiation is dual-era.** `MCPServer.SUPPORTED_PROTOCOL_VERSIONS` is
+  `MODERN_PROTOCOL_VERSIONS` (2026-07-28) + `LEGACY_PROTOCOL_VERSIONS`, newest
+  first. The era is picked per request (`MCPServer.request_era`): `initialize` is
+  legacy; a body whose `params._meta` carries
+  `io.modelcontextprotocol/protocolVersion` is modern; a modern
+  `MCP-Protocol-Version` header with no `_meta` is a malformed modern request, not
+  a legacy one to serve quietly. `initialize` negotiates ONLY legacy versions —
+  echoes the client's when recognized, else the spec-defined default 2025-03-26 —
+  so a client asking for 2026-07-28 on the handshake gets 2025-03-26. An absent
+  `MCP-Protocol-Version` header means that same default and is NOT an error; a
+  header naming a version served in neither era is HTTP 400 with `-32022` and the
+  supported list. `initialize` itself is exempt from that header check, or a client
+  naming an unsupported revision could never reach the handshake that would settle
+  on a supported one.
+- **Modern-era rules** (spec 2026-07-28, tested in `tests/test_modern_protocol.py`):
+  `_meta.protocolVersion` and `_meta.clientCapabilities` are required (`-32602`,
+  HTTP 400 when missing); a version not in `MODERN_PROTOCOL_VERSIONS` — including
+  our own legacy ones — is `-32022`/400; `server/discover`, `tools/list` and
+  `tools/call` are served, everything else (`ping`, `initialize`, `resources/*`)
+  is `-32601` on HTTP **404** (legacy keeps `-32601` inside a 200); every modern
+  result carries `resultType: "complete"` and `_meta` serverInfo, and
+  `server/discover` / `tools/list` carry `ttlMs` + `cacheScope`. `Mcp-Method`,
+  `MCP-Protocol-Version` and (for `tools/call`) `Mcp-Name` must be present and
+  mirror the body, `=?base64?…?=` sentinel included, else `-32020`/400. No
+  session is minted or echoed on a modern request. Legacy clients must see no
+  change at all.
+- **Error codes** — `ping` returns `{}` (legacy). Unknown method is `-32601`. Unknown
+  tool and malformed `tools/call` (non-object `params`, missing `name`, non-object
+  `arguments`) are `-32602` on HTTP 200 in both eras — a bad tool argument is not a
+  malformed envelope. Accepted notifications are HTTP 202 with an empty body.
+- **Caller errors never log a traceback.** Raise `ToolInputError` (a `ValueError`
+  subclass) for anything the caller got wrong; it logs at WARNING. Genuine server or
+  upstream faults keep `ERROR` plus `exc_info` — that is what those logs are for.
+  `tests/test_caller_error_logging.py` pins this for every caller-error class.
+- **The Origin allowlist is enforced** with HTTP 403 before any routing or plugin
+  code, not merely reflected in CORS headers. Requests with NO Origin are allowed —
+  DNS rebinding is browser-only and every native client sends none.
 
 ## CI
 
