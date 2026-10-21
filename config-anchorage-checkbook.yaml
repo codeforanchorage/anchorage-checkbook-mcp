@@ -23,8 +23,11 @@ instructions: |
   - All dollar figures are NET of offsetting entries (single rows run
     from about -$749M to +$743M). Gross totals are meaningless here.
   - Duplicate rows are filtered out by default (Duplicate='No'). The
-    upstream ETL double-loaded whole fiscal years as exact shadow
-    copies (FY2023 on every table; FY2023 AND FY2026 in Revenue), so
+    upstream ETL loads some rows more than once and flags the extra
+    copies (whole-year shadow copies of FY2023 on most tables, plus a
+    scattered share of FY2026 rows on the expenditure and revenue
+    tables, at the 2026-10-16 snapshot; which years are affected
+    changes with each republish), so
     totals from this server will NOT match the public MOA Open
     Checkbook dashboard unless the dashboard user also filters the
     Duplicate column. This server's defaults are the corrected
@@ -39,9 +42,10 @@ instructions: |
     one spelling's total covers the whole entity.
   - Location is the vendor's billing city/state, NOT Anchorage
     geography. Build no geographic analysis on it.
-  - Known gaps: Revenue has no FY2024 at all; FY2026 is partial
-    (loaded through fiscal period 7); Procurement FY2025 (~$1.18B) is
-    an outlier, likely a bulk encumbrance load.
+  - Known gaps: Revenue has no FY2024 at all; Procurement has no
+    FY2026 at all; FY2026 is partial elsewhere (loaded through fiscal
+    period 10 at the 2026-10-16 snapshot); Procurement FY2025 (~$1.18B)
+    is an outlier, likely a bulk encumbrance load.
 
   Aggregate questions are spending_stats calls, not record listings.
   Worked example -- "net non-payroll spending by department in 2025":
