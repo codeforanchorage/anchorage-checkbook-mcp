@@ -25,7 +25,7 @@ server instructions route models there automatically.
 
 | id | Table | Rows (deduped) | Notes |
 | -- | ----- | -------------- | ----- |
-| 0 | `OC_UnauditedExpenditure_NonPayroll` | ~307k | Primary table; payee = `Vendor_Name` (~54k NULL rows are journal entries) |
+| 0 | `OC_UnauditedExpenditure_NonPayroll` | ~307k | Primary table; payee = `Vendor_Name` (~70k NULL or blank rows are journal entries; FY2026 stores them as `''`) |
 | 1 | `OC_UnauditedExpenditure_Payroll` | ~80k | No payee field |
 | 2 | `OC_UnauditedPayroll` | ~140 | Dept × year rollup; **no `Amount`** — measures are `Total_Payroll_Cost`, `Salaries_Wages`, `Overtime`, `Liabilities_Benefits` |
 | 3 | `OC_UnauditedProcurement` | ~39k | POs; FY2025 (~$1.18B) is an outlier (likely bulk encumbrance load) |
@@ -50,8 +50,8 @@ case-sensitive everywhere.
 | `list_tables()` | The six tables with live total/deduplicated row counts, measures, dimensions, payee field, and caveats. The discovery entry point. |
 | `get_table_schema(table)` | Fields with type, distinct-value cardinality (via `returnDistinctValues` — the service's `count_distinct` is advertised but **broken**), and per-field trap notes. |
 | `spending_stats(table, group_by[], …filters, measure, stat_type, order, limit)` | The workhorse: server-side net sum + row count (or count/avg/min/max/stddev/var/percentile_cont), grouped by one or more fields. Labels every figure **net**; states FY2024's absence on Revenue; flags the Procurement FY2025 outlier. |
-| `search_by_vendor(name_contains, table, fiscal_year, limit)` | Distinct payee **spellings** with per-spelling net total + row count. Never merges spellings (names are unnormalized upstream); always excludes NULL payees; no `UPPER()` (backend LIKE is case-insensitive). |
-| `top_vendors(fiscal_year, business_area, table, n)` | Ranking wrapper; excludes NULL payees and the `'Refunds'` label, and says so. |
+| `search_by_vendor(name_contains, table, fiscal_year, limit)` | Distinct payee **spellings** with per-spelling net total + row count. Never merges spellings (names are unnormalized upstream); always excludes NULL and blank payees; no `UPPER()` (backend LIKE is case-insensitive). |
+| `top_vendors(fiscal_year, business_area, table, n)` | Ranking wrapper; excludes NULL/blank payees and the `'Refunds'` label, and says so. |
 | `get_line_items(table, …filters, order_by, limit, offset)` | Raw rows via structured filters only; compact pipe-delimited table; hard cap 500 with a **bookended** TRUNCATED banner quoting the true match count. |
 | `list_field_values(table, field, limit)` | Distinct values of a dimension field; splits `code : label`; notes that periods 13–16 are year-end adjustments. |
 | `query_checkbook(table, where, out_fields, order_by, limit, offset)` | Escape hatch. WHERE validated against injection *shapes* (`UNION SELECT`), never bare tokens — vendors like `Credit Union 1` and `IBEW Local Union 1547` are queryable. Still injects `Duplicate='No'`; rejects `PubDate` date filters. |
