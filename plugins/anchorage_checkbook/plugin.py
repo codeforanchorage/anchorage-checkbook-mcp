@@ -134,10 +134,18 @@ CAVEAT_TRUNCATED = "TRUNCATED"
 CAVEAT_NO_ROWS_MATCHED = "NO_ROWS_MATCHED"
 CAVEAT_NULL_PAYEE_GROUP = "NULL_PAYEE_GROUP"
 
-# What a NULL payee actually is on table 0: ~54k post-dedup rows that are
+# What a NULL payee actually is on table 0: ~52k post-dedup rows that are
 # journal entries, fund transfers and accounting lines. Rendered as a
 # blank cell it reads as "a vendor whose name we don't know", and when it
 # is grouped and ranked it reads as the largest vendor of all.
+#
+# The October 2026 republish (PubDate 2026-10-16) added a second form of
+# the same thing: every FY2026 row of that kind carries an EMPTY STRING
+# instead of NULL (18,140 rows / ~$298M net on table 0; 24,484 on
+# Revenue). `IS NOT NULL` does not exclude those, and ranked by net total
+# the blank spelling came first -- "the largest vendor in Anchorage" with
+# no name. Blank and NULL are therefore one case everywhere below; the
+# ArcGIS backend compares '' and ' ' as equal, so `<> ''` covers both.
 NULL_PAYEE_LABEL = "(no payee -- journal entries, fund transfers, accounting lines)"
 
 # Fiscal periods 13-16 are year-end ADJUSTMENT periods, not calendar
@@ -232,9 +240,10 @@ TABLES: Dict[int, TableInfo] = {
         code_label_fields=("Fund", "G_L_Account"),
         entity_field="Vendor_Name",
         caveats=(
-            "~54k rows (post-dedup) have NULL Vendor_Name -- journal "
-            "entries, fund transfers, and accounting lines, not vendor "
-            "payments. Vendor-facing tools exclude them.",
+            "~70k rows (post-dedup) have a NULL or BLANK Vendor_Name -- "
+            "journal entries, fund transfers, and accounting lines, not "
+            "vendor payments (FY2026 rows carry '' where earlier years "
+            "carry NULL). Vendor-facing tools exclude both forms.",
             "'Refunds' is a real non-vendor Vendor_Name label (~3.9k "
             "rows); it is included in vendor results but is not a "
             "business entity.",
@@ -878,13 +887,22 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         return info.entity_field
 
     def _entity_not_null_clause(self, info: TableInfo) -> str:
-        """Trap 2.4 -- Vendor_Name NULLs.
+        """Trap 2.4 -- Vendor_Name NULLs (and, since FY2026, blanks).
 
-        ~54k post-dedup rows in table 0 are true-NULL journal entries,
-        fund transfers, and accounting lines. Every vendor-facing query
-        excludes them explicitly.
+        ~52k post-dedup rows in table 0 are true-NULL journal entries,
+        fund transfers, and accounting lines, and the October 2026 load
+        stores the FY2026 ones as '' instead. Every vendor-facing query
+        excludes both forms explicitly; a blank payee ranked by net
+        total otherwise comes out as the largest vendor of all.
         """
-        return f"{self._require_entity_field(info)} IS NOT NULL"
+        entity = self._require_entity_field(info)
+        return f"({entity} IS NOT NULL AND {entity} <> '')"
+
+    @staticmethod
+    def _is_blank_payee(value: Any) -> bool:
+        """True for the two storage forms of "no payee": NULL (pre-FY2026
+        rows) and an empty or whitespace-only string (FY2026 rows)."""
+        return value is None or (isinstance(value, str) and not value.strip())
 
     @staticmethod
     def _int_arg(args: Dict[str, Any], name: str, default: Any = None) -> int:
@@ -1017,7 +1035,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         Returns (clauses, years): years is the fiscal-year set the
         filters pin the query to, or None when unfiltered (spans all
         years) -- feed it to _fiscal_notices. A vendor_contains filter
-        also injects the entity IS NOT NULL clause (trap 2.4).
+        also injects the entity not-NULL-not-blank clause (trap 2.4).
         """
         clauses: List[str] = []
         years: Optional[set] = None
@@ -1039,7 +1057,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         if vendor is not None and str(vendor).strip():
             entity = self._require_entity_field(info)
             clauses.append(self._contains_clause(entity, str(vendor).strip()))
-            clauses.append(f"{entity} IS NOT NULL")
+            clauses.append(self._entity_not_null_clause(info))
         return clauses, years
 
     def _default_out_fields(
@@ -1937,24 +1955,25 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             if period_caveat:
                 caveats.append(period_caveat)
 
-        # Grouping by the payee field ranks the NULL bucket alongside real
-        # vendors. On table 0 that bucket is ~54k rows of journal entries
-        # and transfers and it outweighs every actual vendor, so ungated
-        # it reads as "the largest vendor in Anchorage". top_vendors
-        # excludes it; spending_stats must not silently drop the money, so
-        # it labels it instead.
+        # Grouping by the payee field ranks the NULL bucket (and, since
+        # the FY2026 load, the '' bucket) alongside real vendors. On table
+        # 0 those are ~70k rows of journal entries and transfers and they
+        # outweigh every actual vendor, so ungated they read as "the
+        # largest vendor in Anchorage". top_vendors excludes them;
+        # spending_stats must not silently drop the money, so it labels
+        # them instead.
         entity_grouped = bool(info.entity_field and info.entity_field in groups)
         if entity_grouped:
-            if any(r.get(info.entity_field) is None for r in rows):
+            if any(self._is_blank_payee(r.get(info.entity_field)) for r in rows):
                 caveats.append(
                     self._caveat(
                         CAVEAT_NULL_PAYEE_GROUP,
-                        f"One group has a NULL {info.entity_field}: those "
-                        f"rows are journal entries, fund transfers and "
-                        f"accounting lines, NOT a payee. It is labelled "
-                        f"{NULL_PAYEE_LABEL!r} below and must never be "
-                        f"reported as a vendor. Use top_vendors for a "
-                        f"ranking that excludes it.",
+                        f"A group has a NULL or blank {info.entity_field}: "
+                        f"those rows are journal entries, fund transfers "
+                        f"and accounting lines, NOT a payee. It is "
+                        f"labelled {NULL_PAYEE_LABEL!r} below and must "
+                        f"never be reported as a vendor. Use top_vendors "
+                        f"for a ranking that excludes it.",
                     )
                 )
             caveats.append(
@@ -1995,7 +2014,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 rec: Dict[str, Any] = {}
                 for g in groups:
                     value = row.get(g)
-                    if value is None and g == info.entity_field:
+                    if g == info.entity_field and self._is_blank_payee(value):
                         value = NULL_PAYEE_LABEL
                     rec[g] = value
                 value = row.get(out_name)
@@ -2161,7 +2180,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 f"payee received nothing -- spellings are unnormalized, so "
                 f"the entity may exist under a different one. The match is "
                 f"a case-insensitive substring; try a SHORTER fragment. "
-                f"NULL-payee rows (journal entries, transfers) are always "
+                f"NULL/blank-payee rows (journal entries, transfers) are always "
                 f"excluded."
             )
             caveats.insert(0, self._caveat(CAVEAT_NO_ROWS_MATCHED, miss, count=0))
@@ -2302,7 +2321,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         caveats.append(
             self._caveat(
                 CAVEAT_REFUNDS_LABEL,
-                f"NULL payees (journal entries, fund transfers) and the "
+                f"NULL/blank payees (journal entries, fund transfers) and the "
                 f"'Refunds' accounting label are excluded. {REFUNDS_NOTE}",
             )
         )
@@ -3388,7 +3407,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                             "type": "string",
                             "description": (
                                 "Payee filter, case-insensitive "
-                                "substring. Adds an IS NOT NULL guard. "
+                                "substring. Excludes NULL/blank payees. "
                                 "Vendor names are unnormalized -- one "
                                 "entity may have several spellings."
                             ),
@@ -3423,7 +3442,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     f"entity may appear under several spellings (e.g. "
                     f"TransUnion at least three ways), so a "
                     f"single-spelling total may undercount the entity. "
-                    f"NULL payees (journal entries, fund transfers) are "
+                    f"NULL/blank payees (journal entries, fund transfers) are "
                     f"always excluded; the 'Refunds' label is real but "
                     f"is not a business. On the Revenue table the payee "
                     f"field is Customer_Business_Name. Example: "
@@ -3454,7 +3473,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 description=(
                     f"Convenience ranking: top N payees by net total on "
                     f"one table, optionally scoped to a fiscal year "
-                    f"and/or department. NULL payees and the 'Refunds' "
+                    f"and/or department. NULL/blank payees and the 'Refunds' "
                     f"accounting label are excluded (the response says "
                     f"so). Figures are NET. Spellings are unnormalized "
                     f"-- the same entity may hold several ranks. "
@@ -3516,7 +3535,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                         "vendor_contains": {
                             "type": "string",
                             "description": (
-                                "Payee substring filter (adds IS NOT NULL)."
+                                "Payee substring filter (excludes NULL/blank payees)."
                             ),
                         },
                         "order_by": {

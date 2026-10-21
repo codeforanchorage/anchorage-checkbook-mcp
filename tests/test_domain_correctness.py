@@ -168,6 +168,28 @@ class TestNullPayeeIsNotAVendor:
         assert structured["rows"][0]["group"]["Vendor_Name"] is None
 
     @pytest.mark.asyncio
+    async def test_blank_string_group_is_the_same_case(self, plugin):
+        """Reproduced live 2026-10-21 after the October republish: the
+        FY2026 load stores these rows as '' instead of NULL. top_vendors
+        on prod ranked the blank spelling first -- 18,140 rows, ~$298M --
+        and an empty cell reads exactly like the NULL one did."""
+        text, structured = await self._grouped(
+            plugin,
+            [
+                {"Vendor_Name": "", "sum_Amount": 298_401_213.14, "row_count": 18140},
+                {"Vendor_Name": "   ", "sum_Amount": 1.0, "row_count": 1},
+                {"Vendor_Name": "Premera", "sum_Amount": 58_731_838.5, "row_count": 47},
+            ],
+        )
+
+        assert "(no payee -- journal entries, fund transfers, accounting lines)" in text
+        assert "NULL_PAYEE_GROUP" in codes(structured)
+        # No empty payee cell survives into the rendered table.
+        assert "|  |" not in text
+        # The raw stored value is preserved in the structured half.
+        assert structured["rows"][0]["group"]["Vendor_Name"] == ""
+
+    @pytest.mark.asyncio
     async def test_no_null_group_means_no_caveat(self, plugin):
         _text, structured = await self._grouped(
             plugin, [{"Vendor_Name": "Premera", "sum_Amount": 5.0, "row_count": 1}]

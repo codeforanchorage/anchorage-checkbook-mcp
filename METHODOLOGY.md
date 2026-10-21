@@ -96,7 +96,7 @@ Dashboard-equivalent (no filter):
 - All dollar figures are labeled **net**: the tables contain huge
   offsetting entries (single rows from −$749M to +$743M), so gross
   totals are meaningless.
-- Vendor-facing tools exclude NULL payees (journal entries, fund
+- Vendor-facing tools exclude NULL and blank payees (journal entries, fund
   transfers) and never merge distinct vendor spellings — the same
   entity appears under multiple names upstream, and merging them
   silently would be a data claim this server has no basis to make.

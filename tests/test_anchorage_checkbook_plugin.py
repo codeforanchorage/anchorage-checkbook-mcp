@@ -385,9 +385,12 @@ class TestTrapLayer:
             plugin._validate_fiscal_year("23")
 
     def test_entity_field_resolution(self, plugin):
-        assert plugin._entity_not_null_clause(TABLES[0]) == ("Vendor_Name IS NOT NULL")
+        # NULL (pre-FY2026 rows) and '' (FY2026 rows) are one case.
+        assert plugin._entity_not_null_clause(TABLES[0]) == (
+            "(Vendor_Name IS NOT NULL AND Vendor_Name <> '')"
+        )
         assert plugin._entity_not_null_clause(TABLES[4]) == (
-            "Customer_Business_Name IS NOT NULL"
+            "(Customer_Business_Name IS NOT NULL AND Customer_Business_Name <> '')"
         )
         with pytest.raises(ValueError, match="Customer_Business_Name"):
             plugin._require_entity_field(TABLES[1])
@@ -463,7 +466,7 @@ class TestComposition:
         assert "Fiscal_Year = '2023'" in clauses  # string-typed year
         assert "Business_Area LIKE '%Police%'" in clauses  # no UPPER()
         assert "Vendor_Name LIKE '%O''Brien%'" in clauses  # escaped quote
-        assert "Vendor_Name IS NOT NULL" in clauses  # trap 2.4
+        assert "(Vendor_Name IS NOT NULL AND Vendor_Name <> '')" in clauses
         assert years == {"2023"}
 
     def test_structured_where_rejects_inapplicable_field(self, plugin):
@@ -694,7 +697,7 @@ class TestSearchByVendor:
         )
         where = [p for _, p in calls if "outStatistics" in p][0]["where"]
         assert "Vendor_Name LIKE '%union%'" in where
-        assert "Vendor_Name IS NOT NULL" in where  # trap 2.4
+        assert "(Vendor_Name IS NOT NULL AND Vendor_Name <> '')" in where
         assert "UPPER(" not in where  # backend LIKE is case-insensitive
         assert "Duplicate = 'No'" in where
         assert "IBEW Local Union 1547" in text
@@ -743,7 +746,7 @@ class TestTopVendors:
         )
         text = tool_text(await run_tool(plugin, "top_vendors", {"fiscal_year": 2025}))
         where = [p for _, p in calls if "outStatistics" in p][0]["where"]
-        assert "Vendor_Name IS NOT NULL" in where
+        assert "(Vendor_Name IS NOT NULL AND Vendor_Name <> '')" in where
         assert "Vendor_Name <> 'Refunds'" in where
         assert "Fiscal_Year = '2025'" in where
         assert "excluded" in text  # says so in the response
