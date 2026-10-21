@@ -572,8 +572,9 @@ class TestHTTPRequestHandling:
 
         response = await server.handle_http_request(request_body)
 
-        assert response["statusCode"] == 200
-        assert response["body"] == ""  # Empty body for notifications
+        # Streamable HTTP: an accepted notification is 202 with no body.
+        assert response["statusCode"] == 202
+        assert response["body"] == ""
 
     @pytest.mark.asyncio
     async def test_handle_http_request_preserves_headers(self):
@@ -628,14 +629,14 @@ class TestProtocolVersionNegotiation:
         assert response["result"]["protocolVersion"] == requested
 
     @pytest.mark.asyncio
-    async def test_2026_07_28_is_not_claimed(self):
-        """That revision replaces the initialize handshake outright.
-
-        It needs per-request `_meta` plus a mandatory server/discover RPC --
-        a dual-era migration, not a tuple entry. Claiming it without
-        implementing it would strand clients that take us at our word.
-        """
-        assert "2026-07-28" not in MCPServer.SUPPORTED_PROTOCOL_VERSIONS
+    async def test_initialize_never_negotiates_a_modern_version(self):
+        """2026-07-28 drops the handshake entirely, so it is served via
+        per-request _meta (see tests/test_modern_protocol.py) and must
+        never be echoed on an initialize response, even though it IS a
+        supported version: echoing it there would promise stateless
+        semantics on a session."""
+        assert "2026-07-28" in MCPServer.SUPPORTED_PROTOCOL_VERSIONS
+        assert "2026-07-28" not in MCPServer.LEGACY_PROTOCOL_VERSIONS
 
         plugin_manager = MagicMock(spec=PluginManager)
         plugin_manager.config = {}
@@ -650,10 +651,9 @@ class TestProtocolVersionNegotiation:
             }
         )
 
-        # Falls back to a revision we really do implement.
+        assert response["result"]["protocolVersion"] == "2025-03-26"
         assert (
-            response["result"]["protocolVersion"]
-            in MCPServer.SUPPORTED_PROTOCOL_VERSIONS
+            response["result"]["protocolVersion"] in MCPServer.LEGACY_PROTOCOL_VERSIONS
         )
 
     @pytest.mark.asyncio
