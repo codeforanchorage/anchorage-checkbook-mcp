@@ -650,6 +650,193 @@ except Exception as e:
     check("every figure is declared NET", False, repr(e))
 
 
+# ── 7. modern era (MCP 2026-07-28: stateless, per-request _meta) ──────────
+# Everything above rides the legacy initialize handshake. claude.ai and
+# Claude Code open with THIS era instead, so a regression here is invisible
+# to the legacy checks yet breaks every real session.
+
+SERVER_NAME = "Anchorage Open Checkbook MCP"
+N_TOOLS = 8
+MODERN = "2026-07-28"
+MODERN_META = {
+    "io.modelcontextprotocol/protocolVersion": MODERN,
+    "io.modelcontextprotocol/clientInfo": {"name": "smoke", "version": "1.0"},
+    "io.modelcontextprotocol/clientCapabilities": {},
+}
+
+
+def modern(method, params=None, rid=None, name=None, version=MODERN):
+    """One modern-era request: _meta in the body, the mirrored headers the
+    Streamable HTTP transport requires, and (status, body) back."""
+    _id[0] += 1
+    params = dict(params or {})
+    params["_meta"] = {
+        **MODERN_META,
+        "io.modelcontextprotocol/protocolVersion": version,
+    }
+    headers = {"MCP-Protocol-Version": version, "Mcp-Method": method}
+    if name:
+        headers["Mcp-Name"] = name
+    payload = {
+        "jsonrpc": "2.0",
+        "id": rid if rid is not None else _id[0],
+        "method": method,
+        "params": params,
+    }
+    status, body = raw(json.dumps(payload), headers=headers)
+    return status, body or {}
+
+
+# 20. server/discover: the modern replacement for initialize
+try:
+    status, r = modern("server/discover")
+    res = r.get("result", {})
+    versions = res.get("supportedVersions", [])
+    server_info = res.get("_meta", {}).get("io.modelcontextprotocol/serverInfo", {})
+    check(
+        "modern: server/discover",
+        status == 200
+        and versions[:1] == [MODERN]
+        and "2025-03-26" in versions
+        and res.get("resultType") == "complete"
+        and res.get("cacheScope") == "public"
+        and isinstance(res.get("ttlMs"), int)
+        and server_info.get("name") == SERVER_NAME
+        and bool(res.get("instructions")),
+        f"status={status} versions={versions}",
+    )
+except Exception as e:
+    check("modern: server/discover", False, repr(e))
+
+# 21. tools/list carries the CacheableResult hints and resultType
+try:
+    status, r = modern("tools/list")
+    res = r.get("result", {})
+    tools = res.get("tools", [])
+    names = [t["name"] for t in tools]
+    check(
+        "modern: tools/list cache hints + titles",
+        status == 200
+        and len(names) == N_TOOLS
+        and res.get("resultType") == "complete"
+        and res.get("ttlMs") == 300_000
+        and res.get("cacheScope") == "public"
+        and all("title" in t and "annotations" in t for t in tools),
+        f"status={status} n={len(names)} ttlMs={res.get('ttlMs')}",
+    )
+    # Deterministic order (spec SHOULD): a second listing must match.
+    _status2, r2 = modern("tools/list")
+    names2 = [t["name"] for t in r2.get("result", {}).get("tools", [])]
+    check(
+        "modern: tools/list order is deterministic",
+        names == names2,
+        "identical" if names == names2 else "order differs between calls",
+    )
+except Exception as e:
+    check("modern: tools/list cache hints + titles", False, repr(e))
+
+# 22. tools/call with the mirrored Mcp-Name header; result stamped resultType
+try:
+    tool = "anchorage_checkbook__list_tables"
+    status, r = modern("tools/call", {"name": tool, "arguments": {}}, name=tool)
+    res = r.get("result", {})
+    check(
+        "modern: tools/call list_tables",
+        status == 200
+        and res.get("resultType") == "complete"
+        and not res.get("isError")
+        and "OC_UnauditedExpenditure_NonPayroll" in res["content"][0]["text"]
+        and "io.modelcontextprotocol/serverInfo" in res.get("_meta", {}),
+        f"status={status}",
+    )
+except Exception as e:
+    check("modern: tools/call list_tables", False, repr(e))
+
+# 23. ping is gone in this era: 404 + -32601, not a silent {}
+try:
+    status, r = modern("ping")
+    check(
+        "modern: ping -> 404/-32601",
+        status == 404 and r.get("error", {}).get("code") == -32601,
+        f"status={status} body={json.dumps(r)[:80]}",
+    )
+except Exception as e:
+    check("modern: ping -> 404/-32601", False, repr(e))
+
+# 24. unsupported version -> 400 / -32022 listing what we serve, id echoed
+try:
+    status, r = modern("tools/list", rid=4242, version="2099-01-01")
+    err = r.get("error", {})
+    check(
+        "modern: unsupported version -> 400/-32022 (id echoed)",
+        status == 400
+        and err.get("code") == -32022
+        and err.get("data", {}).get("requested") == "2099-01-01"
+        and MODERN in err.get("data", {}).get("supported", [])
+        and r.get("id") == 4242,
+        f"status={status} id={r.get('id')} code={err.get('code')}",
+    )
+except Exception as e:
+    check("modern: unsupported version -> 400/-32022 (id echoed)", False, repr(e))
+
+# 25. header/body disagreement -> 400 / -32020 HeaderMismatch
+try:
+    status, r = raw(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {"_meta": MODERN_META},
+            }
+        ),
+        headers={"MCP-Protocol-Version": MODERN, "Mcp-Method": "ping"},
+    )
+    check(
+        "modern: header mismatch -> 400/-32020",
+        status == 400 and (r or {}).get("error", {}).get("code") == -32020,
+        f"status={status}",
+    )
+except Exception as e:
+    check("modern: header mismatch -> 400/-32020", False, repr(e))
+
+# 26. missing clientCapabilities -> malformed, 400 / -32602
+try:
+    status, r = raw(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {
+                    "_meta": {"io.modelcontextprotocol/protocolVersion": MODERN}
+                },
+            }
+        ),
+        headers={"MCP-Protocol-Version": MODERN, "Mcp-Method": "tools/list"},
+    )
+    check(
+        "modern: missing clientCapabilities -> 400/-32602",
+        status == 400 and (r or {}).get("error", {}).get("code") == -32602,
+        f"status={status}",
+    )
+except Exception as e:
+    check("modern: missing clientCapabilities -> 400/-32602", False, repr(e))
+
+# 27. transport hygiene in this era: no standalone SSE stream (GET is 405
+#     even when asking for text/event-stream); a disallowed Origin is 403
+try:
+    status, _ = raw(None, headers={"Accept": "text/event-stream"}, method="GET")
+    check("modern: GET /mcp (event-stream) -> 405", status == 405, f"status={status}")
+    status, _ = raw(
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}),
+        headers={"Origin": "https://evil.example"},
+    )
+    check("modern: bad Origin -> 403", status == 403, f"status={status}")
+except Exception as e:
+    check("modern: transport hygiene", False, repr(e))
+
+
 # ── summary ────────────────────────────────────────────────────────────────
 
 print()
