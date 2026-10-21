@@ -1,8 +1,9 @@
 ###############################################################################
 # CloudWatch alarms for the MCP server.
 #
-# Surfaces Lambda errors/throttles, API Gateway 5XX spikes, 4XX probing
-# patterns, and Lambda duration approaching the configured timeout.
+# Surfaces Lambda errors/throttles, API Gateway 5XX spikes, and Lambda
+# duration approaching the configured timeout. (The per-repo 4XX probing
+# alarm was retired; the fleet POST /mcp alarm in mcp-stats covers it.)
 #
 # If `alarm_sns_topic_arn` is set, alarms notify that topic. Otherwise the
 # alarms are created with no actions — you can still see them in the

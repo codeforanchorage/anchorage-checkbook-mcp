@@ -28,7 +28,7 @@ show_usage() {
     echo ""
     echo "Options:"
     echo "  --environment, -e   Deployment environment: staging or prod (required)"
-    echo "  --tfworkspace, -w   Terraform workspace name (default: anchorage-parcels-staging or anchorage-parcels-prod)"
+    echo "  --tfworkspace, -w   Terraform workspace name (default: anchorage-checkbook-staging or anchorage-checkbook-prod)"
     echo "  --yes, -y           Skip the interactive apply confirmation (non-interactive runs)"
     echo "  --help, -h          Show this help message"
 }
