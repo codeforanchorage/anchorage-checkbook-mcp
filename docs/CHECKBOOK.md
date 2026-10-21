@@ -62,7 +62,7 @@ case-sensitive everywhere.
 `config-anchorage-checkbook.yaml` is the reference deployment config:
 it enables only this plugin, carries the model-facing `instructions:`
 block (the data traps, stated once for every consumer), and names its
-own Lambda (`anchorage-checkbook-mcp-staging`, us-west-2, 512 MB / 60 s).
+own Lambda (`anchorage-checkbook-mcp-staging`, us-west-2, 512 MB / 28 s).
 
 ```yaml
 plugins:
@@ -70,7 +70,7 @@ plugins:
     enabled: true
     service_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/MOA_OpenCheckbook_Hosted/FeatureServer"
     city_name: "Municipality of Anchorage"
-    timeout: 30
+    timeout: 20   # must sit under the 28 s Lambda timeout
 ```
 
 ### Schema drift check
