@@ -35,7 +35,8 @@ server instructions route models there automatically.
 `Fund` and `G_L_Account` are `"code : label"` strings and are split
 into `_code` / `_label` in every output. `Fiscal_Year` is stored as a
 **string**. `Location` is the vendor's billing city/state, not MOA
-geography. FY2026 is partial (through fiscal period 7).
+geography. FY2026 is partial (through fiscal period 10 at the
+2026-10-16 snapshot) and absent from Procurement entirely.
 
 ## Tools
 

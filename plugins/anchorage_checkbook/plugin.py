@@ -75,13 +75,20 @@ NET_NOTE = (
     "range from about -$749M to +$743M); gross totals are meaningless."
 )
 FY2026_PARTIAL_NOTE = (
-    "FY2026 is partial (loaded through fiscal period 7); never compare "
-    "it to a full year without saying so."
+    "FY2026 is partial and still being loaded (through fiscal period 10 "
+    "at the 2026-10-16 snapshot); never compare it to a full year "
+    "without saying so."
 )
 REVENUE_FY2024_NOTE = (
     "Revenue (table 4) has NO FY2024 rows at all -- years present are "
     "2018-2023, 2025, 2026. A missing FY2024 is a DATA GAP, not zero "
     "revenue."
+)
+PROCUREMENT_FY2026_NOTE = (
+    "Procurement (table 3) has NO FY2026 rows at all at the 2026-10-16 "
+    "snapshot (years present: 2018-2025), although the expenditure and "
+    "revenue tables do. A FY2026 procurement figure of zero is ABSENT "
+    "DATA, not zero purchasing."
 )
 PROCUREMENT_FY2025_NOTE = (
     "Procurement (table 3) FY2025 totals ~$1.18B vs $310-530M in every "
@@ -100,17 +107,23 @@ REFUNDS_NOTE = (
     "accounting label, not a business entity."
 )
 
-# The upstream ETL double-loads whole fiscal years as exact shadow
-# copies flagged Duplicate='Yes' (verified: the 'Yes' sum equals the
-# 'No' sum for the affected year on every table). FY2023 is duplicated
-# on ALL five populated tables; Revenue is duplicated in FY2023 AND
-# FY2026 -- which is why dedup filters on the flag, never on a year.
+# The upstream ETL loads rows more than once and flags the extra copies
+# Duplicate='Yes'. Two shapes have been verified live: whole fiscal
+# years as exact shadow copies (FY2023 -- the 'Yes' sum equals the 'No'
+# sum to the cent) and, since the 2026-10-16 snapshot, a scattered 10-30%
+# of FY2026 rows across every fiscal period on three tables. WHICH years
+# and tables are affected changes with each republish (FY2023 was on all
+# five tables in August 2026; by October the payroll tables had lost it
+# and gained FY2026) -- which is why dedup filters on the flag, never on
+# a year.
 DUPLICATE_WARNING = (
     "**WARNING -- DUPLICATES INCLUDED:** the default Duplicate='No' "
-    "filter is disabled for this response. The upstream ETL "
-    "double-loaded whole fiscal years as exact shadow copies flagged "
-    "Duplicate='Yes' (FY2023 on every table; FY2023 AND FY2026 on "
-    "Revenue). Sums over this response double-count those years."
+    "filter is disabled for this response. The upstream ETL loads some "
+    "rows more than once and flags the extra copies Duplicate='Yes' "
+    "(whole-year shadow copies of FY2023 on most tables, plus a "
+    "scattered share of FY2026 rows on the expenditure and revenue "
+    "tables, at the 2026-10-16 snapshot). Sums over this response "
+    "double-count those rows."
 )
 
 # Stable caveat codes for the structured half of every response.
@@ -370,6 +383,10 @@ TABLES: Dict[int, TableInfo] = {
             "FY2025 totals ~$1.18B vs $310-530M in every other year -- "
             "likely a bulk encumbrance load. Flag it in any Procurement "
             "time series.",
+            "No FY2026 rows at all at the 2026-10-16 snapshot (years "
+            "2018-2025), although the expenditure and revenue tables "
+            "have FY2026 -- a FY2026 procurement figure is absent data, "
+            "not zero.",
             NET_NOTE,
             LOCATION_NOTE,
         ),
@@ -413,7 +430,8 @@ TABLES: Dict[int, TableInfo] = {
             "2018-2023, 2025, 2026. A FY2024 gap in results is a data "
             "gap, not zero revenue.",
             "Duplicate rows exist in FY2023 AND FY2026 (the double-load "
-            "is not a one-year event).",
+            "is not a one-year event, and FY2026's is a scattered share "
+            "of rows rather than a whole-year copy).",
             NET_NOTE,
         ),
     ),
@@ -649,8 +667,10 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         Returns (where_clause, caveat): the ``Duplicate='No'`` clause
         injected into EVERY query by default, or (None, caveat) when
         the caller explicitly set include_duplicates=True. The filter
-        is on the flag, never on a fiscal year -- Revenue proves the
-        double-load recurs (FY2023 AND FY2026).
+        is on the flag, never on a fiscal year -- which years are
+        affected has changed between republishes (FY2023 everywhere in
+        August 2026; FY2023 on three tables plus a scattered share of
+        FY2026 on three by October).
 
         A caveat is returned in BOTH cases, never only on the unsafe
         one. This filter is the single difference between this server's
@@ -667,10 +687,12 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         return f"{DUPLICATE_FIELD} = 'No'", self._caveat(
             CAVEAT_DUPLICATES_FILTERED,
             "Duplicate='No' was applied by default: the upstream ETL "
-            "double-loaded whole fiscal years as exact shadow copies "
-            "(FY2023 on every table; FY2023 AND FY2026 on Revenue). "
-            "Totals here will NOT match the public MOA Open Checkbook "
-            "dashboard unless that user filters the same column.",
+            "loads some rows more than once and flags the extra copies "
+            "(whole-year shadow copies of FY2023 on most tables, plus a "
+            "scattered share of FY2026 rows, at the 2026-10-16 "
+            "snapshot). Totals here will NOT match the public MOA Open "
+            "Checkbook dashboard unless that user filters the same "
+            "column.",
             duplicate_filter="excluded",
         )
 
@@ -777,6 +799,17 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     CAVEAT_KNOWN_GAP,
                     PROCUREMENT_FY2025_NOTE,
                     gap="procurement_fy2025_outlier",
+                )
+            )
+        # Procurement stops at FY2025 while every other populated table
+        # has FY2026: a multi-year or FY2026-pinned procurement result
+        # would otherwise read as "no purchasing this year".
+        if info.id == 3 and touches("2026"):
+            notes.append(
+                cls._caveat(
+                    CAVEAT_KNOWN_GAP,
+                    PROCUREMENT_FY2026_NOTE,
+                    gap="procurement_fy2026_absent",
                 )
             )
         if touches("2026"):
@@ -3231,10 +3264,11 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             else "Municipality of Anchorage"
         )
         dedup_note = (
-            "Duplicate rows (ETL double-loads: FY2023 everywhere, plus "
-            "FY2026 in Revenue) are filtered out by default, so totals "
-            "will not match the public dashboard unless it is also "
-            "filtered on the Duplicate column."
+            "Duplicate rows (ETL double-loads: whole-year copies of "
+            "FY2023 on most tables, plus a scattered share of FY2026 "
+            "rows) are filtered out by default, so totals will not "
+            "match the public dashboard unless it is also filtered on "
+            "the Duplicate column."
         )
         routing_note = (
             "This server covers ONLY Open Checkbook financial tables; "
@@ -3257,10 +3291,11 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             "default": False,
             "description": (
                 "Set True to DISABLE the default Duplicate='No' filter. "
-                "The ETL double-loaded whole fiscal years (FY2023 on "
-                "every table; FY2023 AND FY2026 on Revenue) as exact "
-                "shadow copies -- including them double-counts those "
-                "years. The response will carry a warning."
+                "The ETL loads some rows more than once (whole-year "
+                "shadow copies of FY2023 on most tables; a scattered "
+                "share of FY2026 rows on the expenditure and revenue "
+                "tables) -- including them double-counts those rows. "
+                "The response will carry a warning."
             ),
         }
         fiscal_year_schema = {
@@ -3268,8 +3303,9 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             "description": (
                 "4-digit fiscal year, e.g. 2023. (Stored as a string "
                 "upstream; converted automatically.) Coverage gaps: "
-                "Revenue has no FY2024; FY2026 is partial (through "
-                "period 7)."
+                "Revenue has no FY2024; Procurement has no FY2026; "
+                "FY2026 is partial elsewhere (through period 10 at the "
+                "2026-10-16 snapshot)."
             ),
         }
         fiscal_period_schema = {

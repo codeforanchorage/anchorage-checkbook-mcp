@@ -361,8 +361,9 @@ class TestTrapLayer:
         assert caveat["code"] == "DUPLICATES_INCLUDED"
         assert caveat["duplicate_filter"] == "included"
         assert caveat["message"] == DUPLICATE_WARNING
-        # never a one-year filter
-        assert "FY2023 AND FY2026" in caveat["message"]
+        # never a one-year filter: both known shapes are named
+        assert "FY2023" in caveat["message"]
+        assert "FY2026" in caveat["message"]
 
     def test_pubdate_filter_rejected_with_redirect(self, plugin):
         with pytest.raises(ValueError) as exc:

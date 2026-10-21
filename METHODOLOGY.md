@@ -30,6 +30,24 @@ A naive `SUM(Amount) GROUP BY Fiscal_Year` therefore reports FY2023
 non-payroll spending as ~$1.58B when the corrected figure is ~$792M —
 silently, with no error.
 
+**Re-verified 2026-10-21 against the 2026-10-16 snapshot.** The set of
+affected years had changed, which is the strongest argument for
+filtering on the flag rather than on a year:
+
+| Table | `'Yes'` rows | Fiscal years affected | Shape |
+| ----- | ------------ | --------------------- | ----- |
+| 0 Non-payroll expenditures | 28,044 + 4,736 | FY2023 **and FY2026** | FY2023 an exact copy; FY2026 a scattered 10% of rows across every period |
+| 1 Payroll expenditures | 49,072 | **FY2026 only** (FY2023's copies are gone) | scattered, ~28% of rows |
+| 2 Payroll rollup | 0 | none (was 14 in August) | — |
+| 3 Procurement | 3,642 | FY2023 | exact copy; no FY2026 rows exist on this table |
+| 4 Revenue | 20,110 + 11,729 | FY2023 and FY2026 | FY2023 an exact copy; FY2026 scattered, ~34% |
+
+The FY2026 `'Yes'` rows are not a whole-year shadow: on table 0 they
+sum to ~$9.9M against ~$503M of `'No'` rows. Whether they are true
+re-loads of individual lines or something the ETL flags for another
+reason is not knowable from the service; the server keeps excluding
+them by default and says so.
+
 ## The two defensible positions
 
 **The official MOA Open Checkbook app** exposes the `Duplicate` column
