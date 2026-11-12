@@ -67,7 +67,7 @@ New plugins must implement `MCPPlugin` (or `DataPlugin` for data sources). Place
 
 ## Configuration
 
-Copy `config-anchorage-checkbook.yaml` to `config.yaml` (this fork ships its config ready to go). Enable exactly one plugin. Config supports `${ENV_VAR}` substitution. For Lambda, `config.yaml` is shipped *inside* the deployment package and read at runtime by `server/http_handler.py::_packaged_config_path` — not via the `OPENCONTEXT_CONFIG` env var, which AWS caps at 4KB.
+Copy `config-anchorage-checkbook.yaml` to `config.yaml` (this fork ships its config ready to go). Enable exactly one plugin. Config does **NOT** support `${ENV_VAR}` substitution: `core/validators.py::load_and_validate_config` is a plain `yaml.safe_load`, so a `${VAR}` reaches the plugin as that literal string. Read secrets from `os.environ` in the plugin's `initialize()` instead, and never put one in `config.yaml` -- it is deployed with the Lambda. For Lambda, `config.yaml` is shipped *inside* the deployment package and read at runtime by `server/http_handler.py::_packaged_config_path` — not via the `OPENCONTEXT_CONFIG` env var, which AWS caps at 4KB.
 
 `config.yaml` is gitignored; `config-anchorage-checkbook.yaml` is the tracked source of truth and the two must stay byte-identical (pinned by `tests/test_deployment_config.py`). deploy.sh packages `config.yaml`, so a fix applied to only one of them ships half-applied.
 
