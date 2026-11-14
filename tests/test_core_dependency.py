@@ -40,9 +40,7 @@ def test_core_discovers_this_repos_plugins(monkeypatch):
         for path in (REPO_ROOT / "plugins").glob("*/plugin.py")
         if not path.parent.name.startswith("_")
     }
-    discovered = dict(
-        PluginManager({"plugins": {}}).discover_plugins()
-    )
+    discovered = dict(PluginManager({"plugins": {}}).discover_plugins())
 
     assert on_disk and on_disk <= set(discovered)
     for name in on_disk:
