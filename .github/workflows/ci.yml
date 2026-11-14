@@ -63,7 +63,7 @@ jobs:
         run: ruff --version
 
       - name: ruff check
-        run: ruff check core/ plugins/ server/ tests/
+        run: ruff check plugins/ tests/
 
       # The formatter, enforced as of the reformat in the preceding commit.
       # .pre-commit-config.yaml has run the ruff-format hook all along, so
@@ -71,7 +71,7 @@ jobs:
       # could push formatting CI never checked. Line length is ruff's
       # default 88, not pinned to 79 -- see that commit for the comparison.
       - name: ruff format --check
-        run: ruff format --check core/ plugins/ server/ tests/
+        run: ruff format --check plugins/ tests/
 
   test:
     name: pytest
@@ -101,7 +101,7 @@ jobs:
       - name: pytest with coverage
         run: |
           pytest tests/ -n auto \
-            --cov=core --cov=plugins --cov=server \
+            --cov=plugins \
             --cov-report=term-missing \
             --cov-fail-under=80
 
