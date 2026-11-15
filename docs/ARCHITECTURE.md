@@ -126,7 +126,7 @@ async def health_check() -> bool
 
 **Reference:**
 - [Plugin template](../custom_plugins/template/plugin_template.py)
-- [CKAN plugin](../plugins/ckan/) – Full implementation
+- [CKAN plugin](https://github.com/CityOfBoston/OpenContext/tree/main/plugins/ckan/) – Full implementation
 - [Custom Plugins](CUSTOM_PLUGINS.md) – writing one, with a starting point in `custom_plugins/template/plugin_template.py`
 
 ## Plugin Interface
