@@ -61,7 +61,7 @@ Claude (stdio) → Go client (client/) or stdio_bridge.py → HTTP POST /mcp
 - `server/http_handler.py` — Cloud-agnostic HTTP handler shared by Lambda and local server
 - `stdio_bridge.py` — Python stdio-to-HTTP bridge for connecting Claude Desktop/Code to the local server (alternative to Go client)
 
-**Plugins** (`plugins/`): `anchorage_checkbook`, `arcgis`. This fork keeps only what it runs or imports; the generic `ckan`, `arcgis` and `socrata` plugins of upstream OpenContext that it did not use were deleted (they remain in [CityOfBoston/OpenContext](https://github.com/CityOfBoston/OpenContext)). A plugin implements `MCPPlugin` (or `DataPlugin` with `search_datasets`, `get_dataset`, `query_data`). Custom plugins go in `custom_plugins/` and are auto-discovered.
+**Plugins** (`plugins/`): `anchorage_checkbook`. This fork keeps only what it runs or imports; the generic `ckan`, `arcgis` and `socrata` plugins of upstream OpenContext that it did not use were deleted (they remain in [CityOfBoston/OpenContext](https://github.com/CityOfBoston/OpenContext)). A plugin implements `MCPPlugin` (or `DataPlugin` with `search_datasets`, `get_dataset`, `query_data`). Custom plugins go in `custom_plugins/` and are auto-discovered.
 
 ## Plugin Development
 
