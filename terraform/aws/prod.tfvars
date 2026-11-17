@@ -15,28 +15,36 @@ lambda_memory = 512
 lambda_timeout = 28
 
 api_quota_limit = 3000
-api_rate_limit  = 5
-api_burst_limit = 10
+# These two feed BOTH the usage plan and the stage-wide method settings
+# (api_gateway.tf), so they are the effective throttle on the public /mcp
+# route. Raised 5/10 -> 15/30 on 2026-11-17 for ~11 more attorneys onboarding
+# via Claude.ai, whose requests share Anthropic's egress IPs.
+api_rate_limit  = 15
+api_burst_limit = 30
 
 # DNS lives in Dreamhost. Two CNAMEs required: the ACM validation record
 # (from `terraform output acm_validation_cname_*`) and the traffic record
 # pointing at `terraform output custom_domain_target`.
 custom_domain = "checkbook.codeforanchorage.org"
 
-# Cap concurrent Lambda executions. Cost and blast-radius protection;
-# conversational MCP traffic does not need horizontal scale.
-lambda_reserved_concurrency = 10
+# Cap concurrent Lambda executions. Cost and blast-radius protection if the
+# WAF is bypassed. Raised 10 -> 30 on 2026-11-17 for the attorney onboarding
+# (Anchorage GIS hit its cap of 10 on 2026-11-10: 8 throttles, 5xx alarm).
+lambda_reserved_concurrency = 30
 
-# WAF per-IP rate limit (rolling 5-minute window). ~1 rps sustained per
-# IP is plenty for real users.
-waf_rate_limit_per_5min = 300
+# WAF per-IP rate limit (rolling 5-minute window). INFORMATIONAL while
+# use_shared_waf = true: the live limit is the fleet ACL's, raised to 2000
+# for this MCP on 2026-11-17 (mcp-stats 26f2caa). Claude.ai connector traffic
+# arrives from Anthropic's egress IPs, so many users share one per-IP
+# counter. Kept equal so a rollback to a dedicated ACL restores the same limit.
+waf_rate_limit_per_5min = 2000
 
 # No M365 GCC Copilot consumer for the checkbook server; public /mcp only.
 enable_gcc_route = false
 
 # Use the fleet-wide WAF instead of a dedicated ACL for this MCP. A dedicated
 # ACL costs ~$8/mo in fixed AWS charges regardless of traffic; the shared ACL
-# keeps this MCP's 300/5min limit as its own counter, aggregated on
+# keeps this MCP's 2000/5min limit as its own counter, aggregated on
 # (IP, Host) so it stays independent of the other MCPs sharing that limit.
 #
 # The effective limit lives in mcp-stats' `fleet_waf_members` under the key

@@ -38,7 +38,9 @@ read this before changing anything in `plugins/anchorage_checkbook/`,
 
 ### Network and request shape
 
-- **WAF per-IP rate limit** at 300 req / 5 min, blocking mode. As of
+- **WAF per-IP rate limit** at 2000 req / 5 min in prod (raised from
+  300 on 2026-11-17, because Claude.ai users share Anthropic's egress
+  IPs) and 300 in staging, blocking mode. As of
   2026-08-04 (prod) and 2026-08-24 (staging) this is the **shared
   fleet ACL** `mcp-fleet-waf`, owned by the `mcp-stats` repo and
   resolved from SSM `/mcp-fleet/waf/web_acl_arn`, not a dedicated ACL
@@ -47,13 +49,16 @@ read this before changing anything in `plugins/anchorage_checkbook/`,
   once `use_shared_waf` is true, `waf_rate_limit_per_5min` here is no
   longer read. Staging has no custom domain, so its raw execute-api
   host is a non-member of the fleet ACL's Host-scoped rules and lands
-  on the `rate-limit-unmatched-host` catch-all at the same 300/5min.
-- **API Gateway throttling** at 5 rps / 10 burst with a 3000 req/day
-  quota in prod, 1000/day in staging (`terraform/aws/api_gateway.tf`,
-  `<env>.tfvars`).
+  on the `rate-limit-unmatched-host` catch-all at 300/5min.
+- **API Gateway throttling** at 15 rps / 30 burst in prod, 5 / 10 in
+  staging, stage-wide via `aws_api_gateway_method_settings` reading
+  `api_rate_limit` / `api_burst_limit` from `<env>.tfvars`. The usage-plan
+  quota (3000 req/day prod, 1000 staging) applies only to API-key
+  requests (the disabled `/mcp-gcc` route), not to the unkeyed public
+  `/mcp` route.
 - **AWS managed rule sets** (`KnownBadInputsRuleSet`, `CommonRuleSet`)
   in block mode, carried by the fleet ACL.
-- **Lambda reserved concurrency** capped at 10 (prod) / 5 (staging) to
+- **Lambda reserved concurrency** capped at 30 (prod) / 5 (staging) to
   bound cost and blast radius if the WAF is bypassed (`main.tf`,
   `<env>.tfvars`). On an unauthenticated endpoint this cap, not the
   WAF, is the real denial-of-wallet control. Verify it with

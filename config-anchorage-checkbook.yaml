@@ -116,7 +116,7 @@ aws:
   # MUST stay under the API Gateway integration timeout (29s, a hard
   # REST limit that is not adjustable). Above it the gateway returns 504
   # while the Lambda keeps running -- billing compute the client already
-  # gave up on and, worse, holding one of only 10 (prod) / 5 (staging)
+  # gave up on and, worse, holding one of only 30 (prod) / 5 (staging)
   # reserved-concurrency slots for the remainder. 28s guarantees the
   # Lambda self-terminates first, so the timeout is attributed in
   # Lambda's own metrics and the slot frees at once.
