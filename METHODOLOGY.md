@@ -30,7 +30,32 @@ A naive `SUM(Amount) GROUP BY Fiscal_Year` therefore reports FY2023
 non-payroll spending as ~$1.58B when the corrected figure is ~$792M —
 silently, with no error.
 
-**Re-verified 2026-10-21 against the 2026-10-16 snapshot.** The set of
+**Re-verified 2026-11-17 against the 2026-11-16 snapshot** (table 0:
+28,044 + 5,390 `'Yes'` rows; table 1: 54,344, FY2026 only; table 3:
+3,642, FY2023; table 4: 20,110 + 12,796). FY2026 now runs through
+fiscal period 11. Two load errors that the flag does **not** mark
+were found at this snapshot, so the default filter cannot correct
+them and the tools attach a `KNOWN_GAP` caveat instead:
+
+- **Payroll FY2023 is loaded twice** on tables 1 and 2: two source
+  files (`…Payroll YTD.2023.xlsx`, `…Payroll.2023.xlsx`), 9,496 rows
+  and $423,380,749 each, both `Duplicate='No'`. FY2023 payroll reads
+  ~$847M. (In October these copies looked "gone" because the `'Yes'`
+  count had dropped to zero; the rows were still there, unflagged.)
+- **Revenue FY2026 contains the 2024 source file**: 5,739 rows,
+  ~$1.03B of the ~$2.24B FY2026 net, from
+  `OD0605 Unaudited Revenue YTD.2024.xlsx` and stored in the pre-2026
+  format — very likely the missing FY2024 revenue under the wrong
+  year label.
+
+One observation left open: the payroll rollup (table 2) FY2026 total
+equals table 1's FY2026 total **including** its 54,344 flagged rows
+($433.6M vs $392.6M deduplicated). Either the rollup is built before
+the flag is applied, or the flag marks legitimately repeated
+line items as duplicates now that FY2026 is loaded at line level.
+The service cannot settle which.
+
+**Previous re-verification, 2026-10-21 against the 2026-10-16 snapshot.** The set of
 affected years had changed, which is the strongest argument for
 filtering on the flag rather than on a year:
 

@@ -87,16 +87,16 @@ async def test_t1_list_tables(plugin):
 # ── T2/T3: table 0 duplicate split ────────────────────────────────────
 
 
-# Figures re-pinned 2026-10-21 to the 2026-10-16 snapshot (August: 306,575
-# / 28,044 / FY2023 only). Expect them to move again at the next republish.
+# Figures re-pinned 2026-11-17 to the 2026-11-16 snapshot (October: 341,225
+# / 28,044 + 4,736; August: 306,575 / 28,044 / FY2023 only). Expect them to move again at the next republish.
 
 
 async def test_t2_table0_dedup_count(plugin):
-    assert await plugin._fetch_count(0, "Duplicate = 'No'") == 341225
+    assert await plugin._fetch_count(0, "Duplicate = 'No'") == 347272
 
 
 async def test_t3_table0_duplicates_are_fy2023_and_fy2026(plugin):
-    assert await plugin._fetch_count(0, "Duplicate = 'Yes'") == 28044 + 4736
+    assert await plugin._fetch_count(0, "Duplicate = 'Yes'") == 28044 + 5390
     years = await plugin._fetch_distinct_values(
         0, "Fiscal_Year", where="Duplicate = 'Yes'"
     )
@@ -121,7 +121,7 @@ async def test_t3_table0_duplicates_are_fy2023_and_fy2026(plugin):
 
 async def test_t4_revenue_duplicates_two_years(plugin):
     """Regression guard against implementing dedup as an FY2023 filter."""
-    assert await plugin._fetch_count(4, "Duplicate = 'Yes'") == 20110 + 11729
+    assert await plugin._fetch_count(4, "Duplicate = 'Yes'") == 20110 + 12796
     years = await plugin._fetch_distinct_values(
         4, "Fiscal_Year", where="Duplicate = 'Yes'"
     )
@@ -149,12 +149,12 @@ async def test_t6_business_area_groups(plugin):
     text = await run(
         plugin, "spending_stats", {"table": 0, "group_by": ["Business_Area"]}
     )
-    # 20 named departments through FY2025; the 2026-10-16 snapshot adds
-    # FY2026 rows keyed by bare department CODE ('8700'), so the same
-    # departments appear twice and the count is 35. Pin the floor, not
-    # the artefact.
+    # 20 departments. FY2026 rows are keyed by bare department CODE
+    # ('4000'); unmerged, the same departments appeared twice and the
+    # count was 35. Exactly 20 proves the two forms are merged.
     m = re.search(r"\((\d+) group\(s\)", text)
-    assert m and int(m.group(1)) >= 20, text
+    assert m and int(m.group(1)) == 20, text
+    assert not re.search(r"^\d{4} \|", text, re.MULTILINE), text
 
 
 # ── T7: revenue FY2024 absence is stated ──────────────────────────────
@@ -205,19 +205,19 @@ async def test_t9b_union_vendor_through_escape_hatch(plugin):
 
 async def test_t10_chugach_counts(plugin):
     # See module docstring: the DEDUPLICATED count (live-verified
-    # 2026-10-21: 4,270; the raw count is 4,620. August: 2,401 / 2,648).
+    # 2026-11-17: 4,469; the raw count is 4,827. October: 4,270 / 4,620).
     text = await run(plugin, "search_by_vendor", {"name_contains": "chugach"})
-    assert re.search(r"across 4,270 rows", text)
+    assert re.search(r"across 4,469 rows", text)
     # Case-insensitive without UPPER(): same result for 'CHUGACH'.
     text_upper = await run(plugin, "search_by_vendor", {"name_contains": "CHUGACH"})
-    assert re.search(r"across 4,270 rows", text_upper)
+    assert re.search(r"across 4,469 rows", text_upper)
     # Pre-dedup (duplicates included) with the warning attached.
     text_dup = await run(
         plugin,
         "search_by_vendor",
         {"name_contains": "chugach", "include_duplicates": True},
     )
-    assert re.search(r"across 4,620 rows", text_dup)
+    assert re.search(r"across 4,827 rows", text_dup)
     assert "WARNING -- DUPLICATES INCLUDED" in text_dup
 
 
@@ -304,5 +304,5 @@ async def test_sanity_anchor_total_net(plugin):
     total_line = [ln for ln in text.splitlines() if ln.startswith("net_sum_Amount")]
     assert total_line, text
     value_line = text.splitlines()[text.splitlines().index(total_line[0]) + 1]
-    # 2026-10-16 snapshot (August: 9,140,437,359).
-    assert close_enough(money_in_line(value_line), 9_446_845_871)
+    # 2026-11-16 snapshot (October: 9,446,845,871).
+    assert close_enough(money_in_line(value_line), 9_530_455_608)

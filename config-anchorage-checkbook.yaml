@@ -3,7 +3,7 @@ server_name: "Anchorage Open Checkbook MCP"
 # Surfaced in the MCP `initialize` response as serverInfo.version. Bump it
 # with any behaviour change worth telling a client apart by -- without it,
 # there is no way to tell from a connected client which build is deployed.
-server_version: "1.2.0"
+server_version: "1.3.0"
 description: "Municipality of Anchorage Open Checkbook - unaudited expenditures, payroll costs, procurement, and revenue with data-quality guardrails built in"
 organization: "Municipality of Anchorage"
 
@@ -26,7 +26,7 @@ instructions: |
     upstream ETL loads some rows more than once and flags the extra
     copies (whole-year shadow copies of FY2023 on most tables, plus a
     scattered share of FY2026 rows on the expenditure and revenue
-    tables, at the 2026-10-16 snapshot; which years are affected
+    tables, at the 2026-11-16 snapshot; which years are affected
     changes with each republish), so
     totals from this server will NOT match the public MOA Open
     Checkbook dashboard unless the dashboard user also filters the
@@ -44,8 +44,19 @@ instructions: |
     geography. Build no geographic analysis on it.
   - Known gaps: Revenue has no FY2024 at all; Procurement has no
     FY2026 at all; FY2026 is partial elsewhere (loaded through fiscal
-    period 10 at the 2026-10-16 snapshot); Procurement FY2025 (~$1.18B)
+    period 11 at the 2026-11-16 snapshot); Procurement FY2025 (~$1.18B)
     is an outlier, likely a bulk encumbrance load.
+  - FY2026 rows store Fund, G_L_Account and Business_Area as bare
+    codes ('101000', '4000') where earlier years store 'code : label'
+    strings and department names. The tools resolve them, merge the
+    two forms in groupings, and the fund / gl_account /
+    business_area filters match both. A raw query_checkbook WHERE
+    does not: filter FY2026 there by code.
+  - Two load errors the Duplicate flag does NOT mark (2026-11-16
+    snapshot): payroll FY2023 is loaded twice on tables 1 and 2, so
+    FY2023 payroll reads about double; and about $1.03B of Revenue
+    labelled FY2026 comes from the 2024 source file (very likely the
+    missing FY2024). Group by SourceFile to separate either.
 
   Aggregate questions are spending_stats calls, not record listings.
   Worked example -- "net non-payroll spending by department in 2025":

@@ -75,8 +75,8 @@ NET_NOTE = (
     "range from about -$749M to +$743M); gross totals are meaningless."
 )
 FY2026_PARTIAL_NOTE = (
-    "FY2026 is partial and still being loaded (through fiscal period 10 "
-    "at the 2026-10-16 snapshot); never compare it to a full year "
+    "FY2026 is partial and still being loaded (through fiscal period 11 "
+    "at the 2026-11-16 snapshot); never compare it to a full year "
     "without saying so."
 )
 REVENUE_FY2024_NOTE = (
@@ -85,7 +85,7 @@ REVENUE_FY2024_NOTE = (
     "revenue."
 )
 PROCUREMENT_FY2026_NOTE = (
-    "Procurement (table 3) has NO FY2026 rows at all at the 2026-10-16 "
+    "Procurement (table 3) has NO FY2026 rows at all at the 2026-11-16 "
     "snapshot (years present: 2018-2025), although the expenditure and "
     "revenue tables do. A FY2026 procurement figure of zero is ABSENT "
     "DATA, not zero purchasing."
@@ -122,7 +122,7 @@ DUPLICATE_WARNING = (
     "rows more than once and flags the extra copies Duplicate='Yes' "
     "(whole-year shadow copies of FY2023 on most tables, plus a "
     "scattered share of FY2026 rows on the expenditure and revenue "
-    "tables, at the 2026-10-16 snapshot). Sums over this response "
+    "tables, at the 2026-11-16 snapshot). Sums over this response "
     "double-count those rows."
 )
 
@@ -176,6 +176,48 @@ CODE_LABEL_SEP = " : "
 # '%value%', server-escaped). fiscal_year / fiscal_period /
 # vendor_contains are handled separately (typed validation and the
 # per-table entity field).
+# Fields FY2026 stores as BARE CODES where every earlier year stores a
+# 'code : label' string (Fund, G_L_Account) or a department name
+# (Business_Area): '101000' vs '101000 : Areawide General', '0000200050'
+# vs '200050 : Goods Received/Invoice Received', '4000' vs 'Police
+# Department'. Left alone, that silently breaks three things at the year
+# boundary: a label filter (fund="Roads", business_area="Fire") misses
+# FY2026, a grouping lists one fund or department twice, and rows render a
+# code with no label. schema/code_labels.json (generated from the live
+# data by scripts/refresh_code_labels.py) is the map that repairs all
+# three; a code it does not know is shown as the bare code, never guessed.
+CODED_FIELDS: Tuple[str, ...] = ("Fund", "G_L_Account", "Business_Area")
+# G_L_Account bare codes are zero-padded to this width on some tables
+# ('0000200050' on the expenditure tables, '401010' on Revenue).
+GL_PADDED_WIDTH = 10
+BARE_CODE_NOTE = (
+    "FY2026 rows store Fund, G_L_Account and Business_Area as BARE CODES "
+    "('101000', '0000200050', '4000') where earlier years store "
+    "'code : label' strings and department names. This response resolved "
+    "them to the earlier years' labels, so one fund or department reads "
+    "the same across years; a code with no known label is shown as the "
+    "code alone. The structured filters (fund, gl_account, business_area) "
+    "match both storage forms. A raw query_checkbook WHERE does NOT: there, "
+    "filter FY2026 rows by code (e.g. Business_Area = '4000')."
+)
+PAYROLL_FY2023_NOTE = (
+    "Payroll FY2023 is loaded TWICE and neither copy is flagged: at the "
+    "2026-11-16 snapshot tables 1 and 2 hold two FY2023 source files "
+    "('...Payroll YTD.2023.xlsx' and '...Payroll.2023.xlsx') with "
+    "identical totals, both Duplicate='No'. The default filter cannot "
+    "remove them, so FY2023 payroll figures here are about DOUBLE the "
+    "true amount (~$847M shown vs ~$423M per file). Add SourceFile to "
+    "group_by to see one copy."
+)
+REVENUE_FY2026_MIXED_NOTE = (
+    "Revenue FY2026 mixes TWO source files at the 2026-11-16 snapshot: "
+    "about 5,700 rows (~$1.03B of ~$2.24B net) come from "
+    "'OD0605 Unaudited Revenue YTD.2024.xlsx' and are stored in the "
+    "pre-2026 format. They are very likely the missing FY2024 revenue "
+    "labelled as FY2026, so a FY2026 revenue total is overstated by "
+    "roughly that amount. Add SourceFile to group_by to separate them."
+)
+
 CONTAINS_FILTER_FIELDS: Tuple[Tuple[str, str], ...] = (
     ("business_area", "Business_Area"),
     ("fund", "Fund"),
@@ -383,7 +425,7 @@ TABLES: Dict[int, TableInfo] = {
             "FY2025 totals ~$1.18B vs $310-530M in every other year -- "
             "likely a bulk encumbrance load. Flag it in any Procurement "
             "time series.",
-            "No FY2026 rows at all at the 2026-10-16 snapshot (years "
+            "No FY2026 rows at all at the 2026-11-16 snapshot (years "
             "2018-2025), although the expenditure and revenue tables "
             "have FY2026 -- a FY2026 procurement figure is absent data, "
             "not zero.",
@@ -502,6 +544,16 @@ class AnchorageCheckbookPlugin(MCPPlugin):
     CARDINALITY_CAP = 1000
 
     SCHEMA_SNAPSHOT_PATH = Path(__file__).parent / "schema" / "checkbook_tables.json"
+    CODE_LABELS_PATH = Path(__file__).parent / "schema" / "code_labels.json"
+    # Above this many characters of query parameters a request is sent as
+    # a POST form: a label filter can expand to a long IN (...) list of
+    # codes, and a GET that long is rejected before it reaches the
+    # Feature Service.
+    MAX_GET_PARAM_CHARS = 1500
+    # Statistics that can be recombined exactly when the two storage forms
+    # of one code are merged into one group. stddev, var and
+    # percentile_cont cannot be, and are left as separate groups.
+    MERGEABLE_STATS = ("sum", "count", "min", "max", "avg")
 
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
@@ -519,6 +571,10 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         # Field types from the vendored schema snapshot, loaded lazily
         # for get_table_schema.
         self._snapshot_types: Optional[Dict[int, Dict[str, str]]] = None
+        # Code -> label maps for CODED_FIELDS, loaded lazily from the
+        # vendored JSON. Empty on failure: the plugin then behaves as it
+        # did before the maps existed (degraded > down).
+        self._code_label_maps: Optional[Dict[str, Dict[str, str]]] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -689,7 +745,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             "Duplicate='No' was applied by default: the upstream ETL "
             "loads some rows more than once and flags the extra copies "
             "(whole-year shadow copies of FY2023 on most tables, plus a "
-            "scattered share of FY2026 rows, at the 2026-10-16 "
+            "scattered share of FY2026 rows, at the 2026-11-16 "
             "snapshot). Totals here will NOT match the public MOA Open "
             "Checkbook dashboard unless that user filters the same "
             "column.",
@@ -746,6 +802,160 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             return code.strip(), label.strip()
         return None, value
 
+    def _code_labels(self, field_name: str) -> Dict[str, str]:
+        """Code -> label map for one coded field (see CODED_FIELDS)."""
+        if self._code_label_maps is None:
+            try:
+                with open(self.CODE_LABELS_PATH, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                self._code_label_maps = {
+                    f: dict(data.get(f) or {}) for f in CODED_FIELDS
+                }
+            except Exception as e:
+                logger.warning(f"could not load vendored code labels: {e}")
+                self._code_label_maps = {}
+        return self._code_label_maps.get(field_name, {})
+
+    @staticmethod
+    def _bare_code(value: Any) -> Optional[str]:
+        """The code held by a bare-code value, or None when the value is
+        not one. '0000200050' -> '200050'; '101000' -> '101000'; a
+        'code : label' string or a department name -> None."""
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text.isdigit():
+            return None
+        return text.lstrip("0") or "0"
+
+    def _split_coded(self, field_name: str, value: Any) -> Tuple[Optional[str], Any]:
+        """(code, label) for a coded field in EITHER storage form.
+
+        'code : label' strings split as before. A bare FY2026 code is
+        looked up in the vendored map, so '101000' comes back as
+        ('101000', 'Areawide General') rather than as a label with no
+        code; an unknown code comes back as (code, None).
+        """
+        code = self._bare_code(value)
+        if code is not None and field_name in CODED_FIELDS:
+            return code, self._code_labels(field_name).get(code)
+        return self._split_code_label(value)
+
+    def _canonical_coded(self, field_name: str, value: Any) -> Any:
+        """The one value both storage forms of a code resolve to.
+
+        Fund / G_L_Account: the earlier years' 'code : label' string.
+        Business_Area: the department name. Anything that is not a bare
+        code is returned unchanged; a code the map does not know stays a
+        bare code (a G/L code only loses its zero padding).
+        """
+        code = self._bare_code(value)
+        if code is None or field_name not in CODED_FIELDS:
+            return value
+        label = self._code_labels(field_name).get(code)
+        if field_name == "Business_Area":
+            return label or value
+        return f"{code}{CODE_LABEL_SEP}{label}" if label else code
+
+    def _resolve_bare_codes(
+        self, records: List[Dict[str, Any]]
+    ) -> Tuple[List[Dict[str, Any]], bool]:
+        """Rewrite bare FY2026 codes in row records to their canonical
+        form. Returns (records, seen): seen is True when any row carried
+        one, which is what triggers the BARE_CODE_NOTE caveat."""
+        seen = False
+        out: List[Dict[str, Any]] = []
+        for record in records:
+            fixed = record
+            for key in CODED_FIELDS:
+                if key in record and self._bare_code(record[key]) is not None:
+                    if fixed is record:
+                        fixed = dict(record)
+                    fixed[key] = self._canonical_coded(key, record[key])
+                    seen = True
+            out.append(fixed)
+        return (out if seen else records), seen
+
+    def _bare_code_caveat(self) -> Dict[str, Any]:
+        return self._caveat(CAVEAT_KNOWN_GAP, BARE_CODE_NOTE, gap="fy2026_bare_codes")
+
+    def _coded_contains_clause(self, field_name: str, value: str) -> str:
+        """Substring filter on a coded field that reaches BOTH forms.
+
+        LIKE '%Roads%' finds the earlier years' 'code : label' rows but
+        not FY2026's bare '141000'. So every code whose label contains
+        the fragment is added as an exact IN match. A code fragment needs
+        nothing extra: LIKE '%141000%' already matches both forms.
+        """
+        base = self._contains_clause(field_name, value)
+        needle = value.lower()
+        codes = sorted(
+            code
+            for code, label in self._code_labels(field_name).items()
+            if needle in label.lower()
+        )
+        if not codes:
+            return base
+        forms: List[str] = []
+        for code in codes:
+            forms.append(code)
+            if field_name == "G_L_Account":
+                forms.append(code.zfill(GL_PADDED_WIDTH))
+        in_list = ", ".join(self._sql_quote(f) for f in forms)
+        return f"{base} OR {field_name} IN ({in_list})"
+
+    def _merge_coded_groups(
+        self,
+        rows: List[Dict[str, Any]],
+        groups: List[str],
+        out_name: str,
+        stat_type: str,
+    ) -> Tuple[List[Dict[str, Any]], bool]:
+        """Canonicalize coded group values and, when the statistic allows
+        it, merge the groups that turn out to be the same code.
+
+        Returns (rows, seen): seen is True when any group value was a
+        bare code. Rows keep first-seen order; the caller re-sorts. Pass
+        an empty stat_type to canonicalize without merging.
+        """
+        mergeable = stat_type in self.MERGEABLE_STATS
+        merged: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+        out: List[Dict[str, Any]] = []
+        seen = False
+        for row in rows:
+            fixed = dict(row)
+            for g in groups:
+                if g in CODED_FIELDS and self._bare_code(row.get(g)) is not None:
+                    fixed[g] = self._canonical_coded(g, row.get(g))
+                    seen = True
+            if not mergeable:
+                out.append(fixed)
+                continue
+            key = tuple(fixed.get(g) for g in groups)
+            held = merged.get(key)
+            if held is None:
+                merged[key] = fixed
+                out.append(fixed)
+                continue
+            a, b = held.get(out_name), fixed.get(out_name)
+            if stat_type in ("sum", "count"):
+                held[out_name] = (a or 0) + (b or 0)
+            elif stat_type in ("min", "max") and b is not None:
+                pick = min if stat_type == "min" else max
+                held[out_name] = b if a is None else pick(a, b)
+            for extra in ("row_count", "merge_sum", "merge_n"):
+                if extra in held or extra in fixed:
+                    held[extra] = (held.get(extra) or 0) + (fixed.get(extra) or 0)
+        if mergeable and stat_type == "avg":
+            for row in out:
+                n = row.get("merge_n")
+                if n:
+                    row[out_name] = (row.get("merge_sum") or 0) / n
+        for row in out:
+            row.pop("merge_sum", None)
+            row.pop("merge_n", None)
+        return out, seen
+
     def _expand_code_labels(
         self, records: List[Dict[str, Any]], info: TableInfo
     ) -> List[Dict[str, Any]]:
@@ -758,7 +968,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             expanded: Dict[str, Any] = {}
             for key, value in record.items():
                 if key in info.code_label_fields:
-                    code, label = self._split_code_label(value)
+                    code, label = self._split_coded(key, value)
                     expanded[f"{key}_code"] = code
                     expanded[f"{key}_label"] = label
                 else:
@@ -810,6 +1020,26 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     CAVEAT_KNOWN_GAP,
                     PROCUREMENT_FY2026_NOTE,
                     gap="procurement_fy2026_absent",
+                )
+            )
+        # The missing FY2024 revenue appears to sit inside FY2026 under
+        # the wrong year label, so both years' answers are affected.
+        if info.id == 4 and (touches("2026") or touches("2024")):
+            notes.append(
+                cls._caveat(
+                    CAVEAT_KNOWN_GAP,
+                    REVENUE_FY2026_MIXED_NOTE,
+                    gap="revenue_fy2026_includes_2024_file",
+                )
+            )
+        # A double load the Duplicate flag does NOT mark, so the default
+        # filter cannot correct it.
+        if info.id in (1, 2) and touches("2023"):
+            notes.append(
+                cls._caveat(
+                    CAVEAT_KNOWN_GAP,
+                    PAYROLL_FY2023_NOTE,
+                    gap="payroll_fy2023_double_loaded",
                 )
             )
         if touches("2026"):
@@ -1085,7 +1315,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             if value is None or not str(value).strip():
                 continue
             self._check_field_on_table(info, field_name, arg_name)
-            clauses.append(self._contains_clause(field_name, str(value).strip()))
+            clauses.append(self._coded_contains_clause(field_name, str(value).strip()))
         vendor = args.get("vendor_contains")
         if vendor is not None and str(vendor).strip():
             entity = self._require_entity_field(info)
@@ -1189,7 +1419,12 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             attempt += 1
             transient = False
             try:
-                resp = await self.client.get(url, params=params)
+                if sum(len(str(v)) for v in params.values()) > (
+                    self.MAX_GET_PARAM_CHARS
+                ):
+                    resp = await self.client.post(url, data=params)
+                else:
+                    resp = await self.client.get(url, params=params)
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 transient, last_desc = True, f"network error: {e!r}"
             else:
@@ -1936,14 +2171,73 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             ",".join(groups) if (order == "group" and groups) else f"{out_name} DESC"
         )
 
-        rows = await self._query_statistics(
-            info.id,
-            where,
-            out_statistics,
-            group_by=",".join(groups) if groups else None,
-            order_by=order_by,
-            extra_params={"resultRecordCount": str(limit)} if groups else None,
-        )
+        # A grouping on a coded field returns one fund or department TWICE
+        # across the FY2026 boundary (once per storage form). So fetch
+        # every group, merge the pairs, and only then rank and cut to the
+        # limit -- cutting first would rank each half separately. If the
+        # server cannot return every group in one page the merge would be
+        # partial, so it is skipped and the limit applied as-is.
+        coded_groups = [g for g in groups if g in CODED_FIELDS]
+        bare_seen = False
+        more_groups: Optional[bool] = None
+        if coded_groups:
+            fetch_stats = list(out_statistics)
+            if stat_type == "avg":
+                fetch_stats += [
+                    {
+                        "statisticType": "sum",
+                        "onStatisticField": measure,
+                        "outStatisticFieldName": "merge_sum",
+                    },
+                    {
+                        "statisticType": "count",
+                        "onStatisticField": measure,
+                        "outStatisticFieldName": "merge_n",
+                    },
+                ]
+            raw_rows = await self._query_statistics(
+                info.id,
+                where,
+                fetch_stats,
+                group_by=",".join(groups),
+                order_by=order_by,
+                extra_params={"resultRecordCount": str(self.SERVER_PAGE_SIZE)},
+            )
+            complete = len(raw_rows) < self.SERVER_PAGE_SIZE
+            rows, bare_seen = self._merge_coded_groups(
+                raw_rows if complete else raw_rows[:limit],
+                groups,
+                out_name,
+                stat_type if complete else "",
+            )
+            if complete:
+                if order == "group":
+                    rows.sort(
+                        key=lambda r: tuple(
+                            (r.get(g) is None, r.get(g) if r.get(g) is not None else "")
+                            for g in groups
+                        )
+                    )
+                else:
+                    rows.sort(
+                        key=lambda r: (
+                            r.get(out_name) is None,
+                            -(r.get(out_name) or 0),
+                        )
+                    )
+                more_groups = len(rows) > limit
+                rows = rows[:limit]
+        else:
+            rows = await self._query_statistics(
+                info.id,
+                where,
+                out_statistics,
+                group_by=",".join(groups) if groups else None,
+                order_by=order_by,
+                extra_params={"resultRecordCount": str(limit)} if groups else None,
+            )
+        if more_groups is None:
+            more_groups = bool(groups and len(rows) >= limit)
 
         stat_label = stat_type
         if percentile is not None:
@@ -1962,6 +2256,20 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     f"Table {info.id} is EMPTY upstream (0 rows).",
                 )
             )
+        if bare_seen:
+            caveats.append(self._bare_code_caveat())
+            if stat_type not in self.MERGEABLE_STATS:
+                caveats.append(
+                    self._caveat(
+                        CAVEAT_KNOWN_GAP,
+                        f"A {stat_type} cannot be recombined across the two "
+                        f"storage forms of one code, so a fund, account or "
+                        f"department can appear in TWO groups below: one "
+                        f"for its FY2026 rows and one for earlier years. "
+                        f"Pin fiscal_year to get a single group each.",
+                        gap="fy2026_bare_codes_unmerged",
+                    )
+                )
         # Trap 2.8, made explicit in-band: a Fiscal_Year grouping on
         # Revenue that spans years silently skips FY2024. Without this a
         # missing year reads as a year with no revenue.
@@ -2069,7 +2377,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     f"({len(rows)} {grain}, {matched:,} line item(s), "
                     f"ordered by {order}."
                 )
-                if len(rows) >= limit:
+                if more_groups:
                     group_note += (
                         f" The group list may be truncated at "
                         f"limit={limit}; raise limit for more.)"
@@ -2110,7 +2418,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 "percentile": percentile,
                 "group_by": groups,
                 "groups": len(rows),
-                "truncated": bool(groups and len(rows) >= limit),
+                "truncated": bool(more_groups),
             },
             "rows": [
                 {
@@ -2464,11 +2772,14 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         (records, _), total = await asyncio.gather(
             records_task, self._fetch_count(info.id, where)
         )
+        records, bare_seen = self._resolve_bare_codes(records)
         records = self._expand_code_labels(records, info)
 
         caveats: List[Dict[str, Any]] = [dedup_caveat]
         caveats.append(self._caveat(CAVEAT_NET_OF_OFFSETS, NET_NOTE))
         caveats.extend(self._fiscal_notices(info, sorted(years) if years else None))
+        if bare_seen:
+            caveats.append(self._bare_code_caveat())
         if info.status == "empty":
             caveats.append(
                 self._caveat(
@@ -2551,8 +2862,18 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         )
         more = len(values) > limit
         values = values[:limit]
+        # Both storage forms of one code are one value to a caller: list
+        # it once, in its canonical form, keeping the first position.
+        bare_seen = False
+        if field_name in CODED_FIELDS:
+            bare_seen = any(self._bare_code(v) is not None for v in values)
+            values = list(
+                dict.fromkeys(self._canonical_coded(field_name, v) for v in values)
+            )
 
         caveats: List[Dict[str, Any]] = [dedup_caveat]
+        if bare_seen:
+            caveats.append(self._bare_code_caveat())
         if field_name == PERIOD_FIELD:
             caveats.append(self._caveat(CAVEAT_PERIOD_SCALE, PERIOD_NOTE))
             period_caveat = self._adjustment_period_caveat(values)
@@ -2599,7 +2920,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     dict(
                         zip(
                             ("code", "label"),
-                            self._split_code_label(v),
+                            self._split_coded(field_name, v),
                         )
                     )
                     for v in values
@@ -2628,7 +2949,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             rendered = self._render_value(info.id, field_name, v)
             entry: Dict[str, Any] = {"value": rendered}
             if field_name in info.code_label_fields:
-                code, label = self._split_code_label(v)
+                code, label = self._split_coded(field_name, v)
                 entry["code"] = code
                 entry["label"] = label
             if field_name == PERIOD_FIELD:
@@ -2689,10 +3010,13 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         (records, _), total = await asyncio.gather(
             records_task, self._fetch_count(info.id, where)
         )
+        records, bare_seen = self._resolve_bare_codes(records)
         records = self._expand_code_labels(records, info)
 
         caveats: List[Dict[str, Any]] = [dedup_caveat]
         caveats.append(self._caveat(CAVEAT_NET_OF_OFFSETS, NET_NOTE))
+        if bare_seen:
+            caveats.append(self._bare_code_caveat())
         if info.status == "empty":
             caveats.append(
                 self._caveat(
@@ -3304,8 +3628,8 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 "4-digit fiscal year, e.g. 2023. (Stored as a string "
                 "upstream; converted automatically.) Coverage gaps: "
                 "Revenue has no FY2024; Procurement has no FY2026; "
-                "FY2026 is partial elsewhere (through period 10 at the "
-                "2026-10-16 snapshot)."
+                "FY2026 is partial elsewhere (through period 11 at the "
+                "2026-11-16 snapshot)."
             ),
         }
         fiscal_period_schema = {
@@ -3319,7 +3643,9 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             "description": (
                 "Department filter, case-insensitive substring (e.g. "
                 "'Police', 'Parks'). 20 values -- see "
-                "list_field_values(table, 'Business_Area')."
+                "list_field_values(table, 'Business_Area'). FY2026 rows "
+                "store a department CODE ('4000') instead of the name; "
+                "a name fragment matches both."
             ),
         }
         fund_schema = {
@@ -3327,7 +3653,8 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             "description": (
                 "Fund filter, case-insensitive substring matched "
                 "against the 'code : label' string -- a fund code "
-                "('141000') or label fragment ('Roads') both work."
+                "('141000') or label fragment ('Roads') both work, "
+                "including on FY2026 rows, which store the bare code."
             ),
         }
         limit_schema = lambda default, maximum: {  # noqa: E731

@@ -35,8 +35,20 @@ server instructions route models there automatically.
 `Fund` and `G_L_Account` are `"code : label"` strings and are split
 into `_code` / `_label` in every output. `Fiscal_Year` is stored as a
 **string**. `Location` is the vendor's billing city/state, not MOA
-geography. FY2026 is partial (through fiscal period 10 at the
-2026-10-16 snapshot) and absent from Procurement entirely.
+geography. FY2026 is partial (through fiscal period 11 at the
+2026-11-16 snapshot) and absent from Procurement entirely.
+
+**FY2026 stores bare codes.** `Fund`, `G_L_Account` and
+`Business_Area` hold `'101000'`, `'0000200050'` and `'4000'` on
+FY2026 rows where earlier years hold `'101000 : Areawide General'`
+and `'Police Department'`. `schema/code_labels.json` maps codes back
+to labels: outputs show the label, groupings merge the two forms of
+one code, and the `fund` / `gl_account` / `business_area` filters
+match both. Regenerate the map after a republish with
+`python scripts/refresh_code_labels.py` (the Business_Area
+crosswalk is derived by matching FY2026 payroll totals per code to
+the rollup per department, to the cent). A raw `query_checkbook`
+WHERE is not rewritten — filter FY2026 there by code.
 
 ## Tools
 

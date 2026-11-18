@@ -465,7 +465,8 @@ class TestComposition:
             },
         )
         assert "Fiscal_Year = '2023'" in clauses  # string-typed year
-        assert "Business_Area LIKE '%Police%'" in clauses  # no UPPER()
+        # no UPPER(); the IN arm reaches FY2026's bare department code.
+        assert "Business_Area LIKE '%Police%' OR Business_Area IN ('4000')" in clauses
         assert "Vendor_Name LIKE '%O''Brien%'" in clauses  # escaped quote
         assert "(Vendor_Name IS NOT NULL AND Vendor_Name <> '')" in clauses
         assert years == {"2023"}

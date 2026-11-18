@@ -98,6 +98,26 @@ Two invariants worth knowing before editing a tool:
 
 Caveat codes are stable and callers may branch on them: `NET_OF_OFFSETS`, `DUPLICATES_FILTERED`, `DUPLICATES_INCLUDED`, `ADJUSTMENT_PERIOD`, `VENDOR_SPELLING_VARIANTS`, `KNOWN_GAP`, `LOCATION_IS_BILLING`, `PERIOD_SCALE`, `TABLE_EMPTY`, `REFUNDS_LABEL`, `TRUNCATED`.
 
+## FY2026 bare codes
+
+FY2026 rows store `Fund`, `G_L_Account` and `Business_Area` as bare codes
+(`'101000'`, `'0000200050'`, `'4000'`); earlier years store `code : label`
+strings and department names. `plugins/anchorage_checkbook/schema/code_labels.json`
+is the code→label map that repairs this, and it is **generated** — run
+`python scripts/refresh_code_labels.py` after a republish rather than editing it.
+Three things depend on it, each pinned in `tests/test_bare_codes.py`:
+
+- **Filters** (`_coded_contains_clause`): a label fragment also matches the codes
+  carrying that label, via an `IN (...)` arm. A long list is sent as a POST.
+- **Groupings** (`_merge_coded_groups`): `spending_stats` fetches every group, merges
+  the two storage forms of one code, then ranks and applies the limit. `stddev`,
+  `var` and `percentile_cont` cannot be recombined and are left unmerged, with a caveat.
+- **Rows and value lists** show the canonical form (`code : label`, or the department
+  name). An unknown code is shown as the code, never guessed.
+
+A raw `query_checkbook` WHERE is NOT rewritten; the `KNOWN_GAP` caveat
+(`gap: fy2026_bare_codes`) says so whenever bare codes were resolved.
+
 ## MCP conformance invariants
 
 These are contracts, not preferences — each is enforced by a test. If you change
