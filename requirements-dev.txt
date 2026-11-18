@@ -6,6 +6,10 @@
 # Testing
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
+# `pytest --cov` and `pytest -n auto`, the commands CLAUDE.md and CI use.
+# Keep in step with the [dev] extra in pyproject.toml.
+pytest-cov>=4.0.0
+pytest-xdist>=3.0.0
 # Validates tool output against the declared MCP outputSchema, which the
 # spec makes binding on the server.
 jsonschema>=4.0.0

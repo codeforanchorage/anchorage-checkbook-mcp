@@ -1,0 +1,6 @@
+# Check out every text file with LF endings on every platform. Without this,
+# core.autocrlf=true on Windows checks the tracked config out as CRLF while
+# the gitignored config.yaml copy is LF, and the byte-for-byte comparison in
+# tests/test_deployment_config.py::TestConfigCopiesInSync fails locally.
+# Shell scripts and the config packaged into the Lambda also need LF.
+* text=auto eol=lf
