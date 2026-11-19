@@ -27,9 +27,6 @@ locals {
 
   lambda_memory  = local.config.aws.lambda_memory != null ? local.config.aws.lambda_memory : var.lambda_memory
   lambda_timeout = local.config.aws.lambda_timeout != null ? local.config.aws.lambda_timeout : var.lambda_timeout
-
-  # Serialize config to JSON for environment variable
-  config_json = jsonencode(local.config)
 }
 
 # IAM role for Lambda

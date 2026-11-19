@@ -12,9 +12,7 @@ packages, but it is GITIGNORED, so a fresh clone (and CI) does not have it.
 must stay byte-identical; that is pinned below, and the ladder is asserted
 against the tracked copy so these tests are meaningful in CI.
 
-Scope: the enabled plugin is ``anchorage_checkbook``. The other plugins
-shipped in this fork are ``enabled: false`` and are deliberately not asserted
-on -- an inert plugin's timeout cannot hang a Lambda.
+Scope: ``anchorage_checkbook``, the only plugin this fork ships or configures.
 """
 
 import re

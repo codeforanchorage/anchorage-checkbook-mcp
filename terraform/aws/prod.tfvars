@@ -2,7 +2,7 @@ lambda_name = "anchorage-checkbook-mcp-prod"
 stage_name  = "prod"
 aws_region  = "us-west-2"
 config_file = "config.yaml"
-# 512 MB / 60 s: every checkbook tool is a single attribute query or
+# 512 MB / 28 s: every checkbook tool is a single attribute query or
 # server-side statistics call against one Feature Service table -- no
 # geometry, no polygon caches, no batch workloads.
 lambda_memory = 512

@@ -74,8 +74,8 @@ You can also test with Claude by asking it to search your data, or use [Testing]
 
 1. Clone [this repository](https://github.com/codeforanchorage/anchorage-checkbook-mcp)
 2. Clone your fork
-3. Create config: `cp config-example.yaml config.yaml`
-4. Edit `config.yaml` with **exactly one** plugin enabled
+3. Create config: `cp config-anchorage-checkbook.yaml config.yaml`
+4. Keep **exactly one** plugin enabled, and keep the two config files byte-identical
 
 ### 2. Deploy to AWS
 

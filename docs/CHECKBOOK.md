@@ -23,13 +23,13 @@ server instructions route models there automatically.
 
 ## Tables
 
-| id | Table | Rows (deduped) | Notes |
+| id | Table | Rows (deduped, 2026-11-16 snapshot) | Notes |
 | -- | ----- | -------------- | ----- |
-| 0 | `OC_UnauditedExpenditure_NonPayroll` | ~307k | Primary table; payee = `Vendor_Name` (~70k NULL or blank rows are journal entries; FY2026 stores them as `''`) |
-| 1 | `OC_UnauditedExpenditure_Payroll` | ~80k | No payee field |
-| 2 | `OC_UnauditedPayroll` | ~140 | Dept × year rollup; **no `Amount`** — measures are `Total_Payroll_Cost`, `Salaries_Wages`, `Overtime`, `Liabilities_Benefits` |
-| 3 | `OC_UnauditedProcurement` | ~39k | POs; FY2025 (~$1.18B) is an outlier (likely bulk encumbrance load) |
-| 4 | `OC_UnauditedRevenue` | ~69k | Payee = `Customer_Business_Name`; **no FY2024 at all**; duplicated in FY2023 *and* FY2026 |
+| 0 | `OC_UnauditedExpenditure_NonPayroll` | ~347k | Primary table; payee = `Vendor_Name` (~70k NULL or blank rows are journal entries; FY2026 stores them as `''`) |
+| 1 | `OC_UnauditedExpenditure_Payroll` | ~276k | No payee field |
+| 2 | `OC_UnauditedPayroll` | ~150 | Dept × year rollup; **no `Amount`** — measures are `Total_Payroll_Cost`, `Salaries_Wages`, `Overtime`, `Liabilities_Benefits` |
+| 3 | `OC_UnauditedProcurement` | ~36k | POs; FY2025 (~$1.18B) is an outlier (likely bulk encumbrance load) |
+| 4 | `OC_UnauditedRevenue` | ~103k | Payee = `Customer_Business_Name`; **no FY2024 at all**; duplicated in FY2023 *and* FY2026 |
 | 5 | `OC_UnaudRev_vs_Exp` | 0 | Empty upstream; exposed with `status: empty` |
 
 `Fund` and `G_L_Account` are `"code : label"` strings and are split

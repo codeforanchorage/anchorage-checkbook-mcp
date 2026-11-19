@@ -12,12 +12,11 @@ if ! command -v jq &> /dev/null; then
 fi
 
 BASE_URL="${1:-http://localhost:8000/mcp}"
-# Optional: tool to call in step 3 and its JSON arguments. Defaults keep
-# the original CKAN behavior; pass e.g.:
+# Optional: tool to call in step 3 and its JSON arguments, e.g.:
 #   ./scripts/test_streamable_http.sh http://localhost:8000/mcp \
-#     anchorage_checkbook__search_by_vendor '{"name_contains": "chugach"}'
-DEFAULT_TOOL_ARGS='{"query": "traffic", "limit": 5}'
-TOOL_NAME="${2:-ckan__search_datasets}"
+#     anchorage_checkbook__top_vendors '{"fiscal_year": 2025}'
+DEFAULT_TOOL_ARGS='{"name_contains": "chugach", "limit": 5}'
+TOOL_NAME="${2:-anchorage_checkbook__search_by_vendor}"
 TOOL_ARGS="${3:-$DEFAULT_TOOL_ARGS}"
 
 echo "=========================================="
@@ -71,7 +70,7 @@ BODY=$(cat "$TEMP_BODY")
 if [ "$HTTP_CODE" != "200" ]; then
   echo -e "${YELLOW}Error: HTTP $HTTP_CODE${NC}"
   echo "$BODY" | jq '.' 2>/dev/null || echo "$BODY"
-  rm -f "$TEMP_RESPONSE" "$TEMP_HEADERS"
+  rm -f "$TEMP_BODY" "$TEMP_HEADERS"
   exit 1
 fi
 
@@ -79,7 +78,7 @@ echo "Response:"
 echo "$BODY" | jq '.'
 echo ""
 
-rm -f "$TEMP_RESPONSE" "$TEMP_HEADERS"
+rm -f "$TEMP_BODY" "$TEMP_HEADERS"
 
 if [ -z "$SESSION_ID" ]; then
   echo -e "${YELLOW}Warning: Could not extract session ID from headers${NC}"

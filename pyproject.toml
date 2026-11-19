@@ -1,9 +1,9 @@
 [project]
 name = "opencontext"
 version = "1.0.0"
-description = "Extensible MCP framework template for civic data platforms"
+description = "Anchorage Open Checkbook MCP server, built on the OpenContext framework"
 authors = [
-    {name = "Srihari Raman", email = "srihari.raman@boston.gov"}
+    {name = "Code for Anchorage"}
 ]
 license = {text = "MIT"}
 readme = "README.md"
@@ -41,9 +41,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/thealphacubicle/OpenContext"
-Documentation = "https://github.com/thealphacubicle/OpenContext/blob/main/README.md"
-Repository = "https://github.com/thealphacubicle/OpenContext"
+Homepage = "https://github.com/codeforanchorage/anchorage-checkbook-mcp"
+Documentation = "https://github.com/codeforanchorage/anchorage-checkbook-mcp/blob/main/docs/CHECKBOOK.md"
+Repository = "https://github.com/codeforanchorage/anchorage-checkbook-mcp"
+Upstream = "https://github.com/thealphacubicle/OpenContext"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

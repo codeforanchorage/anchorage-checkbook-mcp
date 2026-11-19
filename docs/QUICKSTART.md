@@ -138,7 +138,7 @@ duplicate-filter state and any known data gaps attached to the answer.
 
 - Read [Architecture Guide](ARCHITECTURE.md)
 - Create [Custom Plugin](CUSTOM_PLUGINS.md)
-- See [`config-example.yaml`](../config-example.yaml) for every configurable option
+- See [`config-anchorage-checkbook.yaml`](../config-anchorage-checkbook.yaml) for the configuration this fork deploys
 
 ## Getting Help
 

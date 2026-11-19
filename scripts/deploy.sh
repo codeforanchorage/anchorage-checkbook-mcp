@@ -98,8 +98,7 @@ echo ""
 # Check if config.yaml exists
 if [ ! -f "config.yaml" ]; then
     echo -e "${RED}❌ Error: config.yaml not found${NC}"
-    echo "Create config from template: cp config-example.yaml config.yaml"
-    echo "Then edit config.yaml and enable exactly ONE plugin."
+    echo "Create it from the tracked copy: cp config-anchorage-checkbook.yaml config.yaml"
     exit 1
 fi
 
@@ -186,7 +185,7 @@ if [ $EXIT_CODE -eq 1 ]; then
     echo "You must enable exactly ONE plugin in config.yaml."
     echo ""
     echo "To enable a plugin, set 'enabled: true' for:"
-    echo "  • ckan"
+    echo "  • anchorage_checkbook"
     echo "  • A custom plugin in custom_plugins/"
     echo ""
     echo "See docs/GETTING_STARTED.md for setup instructions."

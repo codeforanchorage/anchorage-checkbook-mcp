@@ -26,25 +26,29 @@ Edit `config.yaml` and set `enabled: true` for ONE plugin:
 
 ```yaml
 plugins:
-  ckan:
+  anchorage_checkbook:
     enabled: true # Only ONE plugin should be enabled
 ```
 
+This fork ships its config ready to use: `cp config-anchorage-checkbook.yaml config.yaml`. The two files must stay byte-identical.
+
 ### Can I use environment variables in config.yaml?
 
-Yes, but they must be resolved before deployment. Terraform will set the final config as a Lambda environment variable.
+No. The config is read with a plain `yaml.safe_load`, so a `${VAR}` reaches the plugin as that literal string. A plugin that needs a secret reads it from `os.environ` in `initialize()`. Never put a secret in `config.yaml`: it ships inside the Lambda package.
 
 ### What if I need to change configuration after deployment?
 
-Edit `config.yaml` and run `./scripts/deploy.sh` again. Terraform will update the Lambda environment variable.
+Edit `config-anchorage-checkbook.yaml`, copy it to `config.yaml`, commit, and run `./scripts/deploy.sh -e <staging|prod>` again. The config ships inside the Lambda package, so a config change is a code deploy.
 
 ## Plugins
 
 ### What plugins are available?
 
-Built-in plugins:
+This fork ships one plugin:
 
-- **CKAN** - For CKAN-based portals (data.boston.gov, data.gov, data.gov.uk)
+- **anchorage_checkbook** - the Municipality of Anchorage Open Checkbook (see [CHECKBOOK.md](CHECKBOOK.md))
+
+The generic CKAN, ArcGIS and Socrata plugins of upstream OpenContext are not in this fork; they remain in [CityOfBoston/OpenContext](https://github.com/CityOfBoston/OpenContext).
 
 You can also create custom plugins in `custom_plugins/`.
 
@@ -61,9 +65,10 @@ No. Built-in plugins are part of the core framework. Create a custom plugin inst
 ### What AWS resources are created?
 
 - Lambda function
-- Lambda Function URL
+- API Gateway REST API, stage and usage plan
 - IAM role and policies
-- CloudWatch Log Group
+- CloudWatch log groups and alarms
+- An association with the shared fleet WAF
 
 ### How much does it cost?
 
@@ -75,7 +80,7 @@ The current implementation is AWS-specific. Contributions for other providers ar
 
 ### How do I update an existing deployment?
 
-Run `./scripts/deploy.sh` again. Terraform will update the Lambda function.
+Commit your changes and run `./scripts/deploy.sh -e <staging|prod>` again. The script refuses a working tree with uncommitted changes, so the live code always matches a commit.
 
 ## Usage
 
@@ -91,12 +96,12 @@ Enable the connector in your conversation by clicking "+" → Connectors → tog
 
 ### Can I use it without Claude Desktop?
 
-Yes! Call the Lambda URL directly via HTTP POST with MCP JSON-RPC format.
+Yes. POST MCP JSON-RPC to the API Gateway URL (it ends in `/mcp`).
 
 ### How do I test my deployment?
 
 ```bash
-curl -X POST https://your-lambda-url \
+curl -X POST https://your-api-id.execute-api.us-west-2.amazonaws.com/staging/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
@@ -119,7 +124,7 @@ curl -X POST https://your-lambda-url \
 
 **Check:**
 
-1. API Gateway or Lambda URL is correct (includes `/mcp`)
+1. The API Gateway URL is correct (includes `/mcp`)
 2. Connector is added in Settings → Connectors
 3. Connector is enabled for the conversation (click "+" → Connectors → toggle on)
 
@@ -146,7 +151,7 @@ pip install aiohttp
 python3 scripts/local_server.py
 
 # In another terminal, test with curl
-curl -X POST http://localhost:8000 \
+curl -X POST http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
@@ -157,15 +162,11 @@ Create a test script that imports and initializes your plugin:
 
 ```python
 import asyncio
-from plugins.ckan.plugin import CKANPlugin
+from plugins.anchorage_checkbook.plugin import AnchorageCheckbookPlugin
 
 async def test():
-    plugin = CKANPlugin({
-        "base_url": "https://data.boston.gov",
-        "portal_url": "https://data.boston.gov",
-        "city_name": "Boston",
-        "timeout": 120,
-    })
+    # An empty config uses the default service URL.
+    plugin = AnchorageCheckbookPlugin({})
     await plugin.initialize()
     tools = plugin.get_tools()
     print(f"Tools: {[t.name for t in tools]}")
@@ -177,8 +178,8 @@ asyncio.run(test())
 **Option 3: Run unit tests**
 
 ```bash
-pip install pytest pytest-asyncio
-pytest tests/
+pip install -r requirements-dev.txt
+pytest tests/ -n auto
 ```
 
 ### Can I contribute?
@@ -187,13 +188,13 @@ Yes! Contributions are welcome. Please open an issue or pull request.
 
 ### Where is the code?
 
-[GitHub Repository](https://github.com/thealphacubicle/OpenContext)
+[GitHub Repository](https://github.com/codeforanchorage/anchorage-checkbook-mcp). The framework this fork is built on is [OpenContext](https://github.com/thealphacubicle/OpenContext).
 
 ## Support
 
 ### Where can I get help?
 
-- [GitHub Issues](https://github.com/thealphacubicle/OpenContext/issues)
+- [GitHub Issues](https://github.com/codeforanchorage/anchorage-checkbook-mcp/issues)
 - [Documentation](.)
 - [FAQ](FAQ.md) (this page)
 

@@ -19,9 +19,11 @@ Coverage here mirrors the work order's traps and patterns:
 """
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import yaml
 
 from core.interfaces import PluginType
 from plugins.anchorage_checkbook.config_schema import (
@@ -143,7 +145,13 @@ class TestPluginAttributes:
         p = AnchorageCheckbookPlugin({})
         assert p.plugin_name == "anchorage_checkbook"
         assert p.plugin_type == PluginType.OPEN_DATA
-        assert p.plugin_version == "1.0.0"
+        # Equal to the server version the tracked config declares.
+        config = yaml.safe_load(
+            (
+                Path(__file__).parent.parent / "config-anchorage-checkbook.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        assert p.plugin_version == config["server_version"]
 
     def test_registry_tables_zero_to_five_no_six(self):
         assert sorted(TABLES) == [0, 1, 2, 3, 4, 5]

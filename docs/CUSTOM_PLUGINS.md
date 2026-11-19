@@ -318,11 +318,12 @@ def __init__(self, config: Dict[str, Any]) -> None:
 ## Reference
 
 - [Plugin Template](../custom_plugins/template/plugin_template.py)
-- [CKAN Plugin](https://github.com/CityOfBoston/OpenContext/tree/main/plugins/ckan/plugin.py) - Example implementation
-- [Core Interfaces](../core/interfaces.py) - API reference
+- [Checkbook plugin](../plugins/anchorage_checkbook/plugin.py) - the implementation this fork deploys
+- [CKAN Plugin](https://github.com/CityOfBoston/OpenContext/tree/main/plugins/ckan/plugin.py) - a generic upstream example
+- [Core interfaces](https://github.com/codeforanchorage/opencontext-core) - `core/interfaces.py` in the `opencontext-core` package
 
 ## Getting Help
 
 - [FAQ](FAQ.md)
-- [GitHub Issues](https://github.com/thealphacubicle/OpenContext/issues)
+- [GitHub Issues](https://github.com/codeforanchorage/anchorage-checkbook-mcp/issues)
 - [Architecture Guide](ARCHITECTURE.md)

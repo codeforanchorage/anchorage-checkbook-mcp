@@ -1,124 +1,50 @@
 # Built-in Plugins Reference
 
-OpenContext includes built-in plugins for CKAN and Socrata open data portals, plus Anchorage-specific GIS and parcel plugins that are forkable to other cities.
+This fork ships one plugin.
 
-## CKAN Plugin
+## `anchorage_checkbook`
 
-For CKAN-based open data portals (e.g., data.boston.gov, data.gov, data.gov.uk).
-
-### Configuration
-
-```yaml
-plugins:
-  ckan:
-    enabled: true
-    base_url: "https://data.yourcity.gov"       # CKAN API base URL
-    portal_url: "https://data.yourcity.gov"     # Public portal URL
-    city_name: "Your City"                      # City/organization name
-    timeout: 120                                # HTTP timeout in seconds
-    api_key: "${CKAN_API_KEY}"                  # Optional: API key
-```
-
-### Tools
-
-- `ckan__search_datasets(query, limit)` - Search for datasets
-- `ckan__get_dataset(dataset_id)` - Get dataset metadata
-- `ckan__query_data(resource_id, filters, limit)` - Query data from a resource
-- `ckan__get_schema(resource_id)` - Get schema for a resource
-
-### Examples
-
-**Search datasets:**
-```
-Search for datasets about housing in Boston
-```
-
-**Get dataset:**
-```
-Get details about the "311 Service Requests" dataset
-```
-
-**Query data:**
-```
-Query the first 10 records from resource abc123
-```
-
-## CKAN API
-
-This plugin uses CKAN's Action API:
-- `/api/3/action/package_search` - Search datasets
-- `/api/3/action/package_show` - Get dataset
-- `/api/3/action/datastore_search` - Query data
-
-See [CKAN API documentation](https://docs.ckan.org/en/latest/api/) for details.
-
-## Socrata Plugin
-
-For Socrata-based open data portals (e.g., data.cityofchicago.org, data.cityofnewyork.us, data.seattle.gov).
-
-**Note:** Socrata requires a free app token. Register at [https://dev.socrata.com/register](https://dev.socrata.com/register).
+Read-only tools over the Municipality of Anchorage Open Checkbook: unaudited
+non-payroll and payroll expenditures, a payroll cost rollup, procurement, and
+revenue. The tools, the tables and the dataset's traps are documented in
+[CHECKBOOK.md](CHECKBOOK.md).
 
 ### Configuration
 
 ```yaml
 plugins:
-  socrata:
+  anchorage_checkbook:
     enabled: true
-    base_url: "https://data.cityofboston.gov"
-    portal_url: "https://data.cityofboston.gov"
-    city_name: "Boston"
-    app_token: "${SOCRATA_APP_TOKEN}"   # Required
-    timeout: 30.0                        # HTTP timeout (default: 30)
+    service_url: "https://services2.arcgis.com/Ce3DhLRthdwbHlfF/arcgis/rest/services/MOA_OpenCheckbook_Hosted/FeatureServer"
+    city_name: "Municipality of Anchorage"
+    timeout: 20   # must stay below aws.lambda_timeout (28)
 ```
+
+[`config-anchorage-checkbook.yaml`](../config-anchorage-checkbook.yaml) is the
+complete configuration this fork deploys.
 
 ### Tools
 
-- `socrata__search_datasets(query, limit)` - Search for datasets in the portal catalog
-- `socrata__get_dataset(dataset_id)` - Get full metadata for a dataset (4x4 ID)
-- `socrata__get_schema(dataset_id)` - Get column schema for constructing SoQL queries
-- `socrata__query_dataset(dataset_id, soql_query)` - Query data using SoQL
-- `socrata__execute_sql(dataset_id, soql)` - Execute raw SoQL query (advanced, similar to CKAN execute_sql)
-- `socrata__list_categories()` - List all categories with dataset counts
+Tool names carry the plugin prefix on the wire, for example
+`anchorage_checkbook__spending_stats`.
 
-### Examples
+- `list_tables()`
+- `get_table_schema(table)`
+- `spending_stats(table, group_by, stat_type, …filters)`
+- `search_by_vendor(name_contains, table, fiscal_year, limit)`
+- `top_vendors(fiscal_year, business_area, table, n)`
+- `get_line_items(table, …filters, order_by, limit, offset)`
+- `list_field_values(table, field, limit)`
+- `query_checkbook(table, where, out_fields, order_by, limit, offset)`
 
-**Search datasets:**
-```
-Search for datasets about housing in Boston
-```
+## Upstream plugins not in this fork
 
-**Get dataset:**
-```
-Get details about dataset wc4w-4jew
-```
+Upstream OpenContext also has generic `ckan`, `arcgis` and `socrata` plugins.
+This fork does not use them and they were deleted here; they remain in
+[CityOfBoston/OpenContext](https://github.com/CityOfBoston/OpenContext).
 
-**Get schema (call before query_dataset):**
-```
-Get schema for dataset wc4w-4jew
-```
+## Custom plugins
 
-**Query data:**
-```
-Query dataset wc4w-4jew with: SELECT * WHERE year > 2020 LIMIT 50
-```
-
-**List categories:**
-```
-List all dataset categories on Boston's open data portal
-```
-
-### Socrata API
-
-This plugin uses two Socrata API layers:
-- **Discovery API** (api.us.socrata.com) - Catalog search, categories
-- **SODA3** (portal domain) - Dataset metadata, schema, data queries
-
-See [Socrata developer documentation](https://dev.socrata.com/) for details.
-
-## Custom Plugins
-
-If your portal doesn't use CKAN, you can create a custom plugin. See [Custom Plugins Guide](CUSTOM_PLUGINS.md) for instructions.
-
-## Examples
-
-See [`config-example.yaml`](../config-example.yaml) for a complete annotated configuration, and [`config-anchorage-checkbook.yaml`](../config-anchorage-checkbook.yaml) for the one this fork deploys.
+To serve a different data source, write a plugin in `custom_plugins/` and
+enable it in place of this one. See the
+[Custom Plugins Guide](CUSTOM_PLUGINS.md).

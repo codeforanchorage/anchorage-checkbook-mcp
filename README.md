@@ -96,4 +96,4 @@ Hooks: Ruff, yamllint, gofmt. Run manually: `pre-commit run --all-files`.
 
 MIT — see [LICENSE](LICENSE).
 
-**Author:** Srihari Raman, City of Boston Department of Innovation and Technology
+**OpenContext framework author:** Srihari Raman, City of Boston Department of Innovation and Technology. This fork is maintained by Code for Anchorage.

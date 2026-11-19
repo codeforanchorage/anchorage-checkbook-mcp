@@ -21,12 +21,12 @@ Deploy OpenContext to AWS Lambda. See [Getting Started](GETTING_STARTED.md) for 
 # Configure AWS
 aws configure
 
-# Create config from template (if needed)
-cp config-example.yaml config.yaml
-# Edit config.yaml - enable exactly ONE plugin
+# Create config from the tracked copy (if needed)
+cp config-anchorage-checkbook.yaml config.yaml
 
-# Deploy (validates config, packages, deploys)
-./scripts/deploy.sh
+# Deploy (validates config, packages, deploys). The working tree must be
+# committed: deploy.sh refuses uncommitted changes.
+./scripts/deploy.sh --environment staging
 ```
 
 ### Manual Terraform
@@ -74,7 +74,7 @@ terraform output -raw lambda_url      # Testing
 
 ## Configuration
 
-Config is passed via `OPENCONTEXT_CONFIG` env var. Create `config.yaml` from `config-example.yaml`, edit it, and run `./scripts/deploy.sh` to update.
+`config.yaml` ships **inside** the Lambda package and is read at runtime; it is not passed through the `OPENCONTEXT_CONFIG` env var, which AWS caps at 4 KB. Edit `config-anchorage-checkbook.yaml`, copy it to `config.yaml` (the two must stay byte-identical), commit, and run `./scripts/deploy.sh -e <staging|prod>` to update.
 
 ### Lambda Settings (in config.yaml)
 

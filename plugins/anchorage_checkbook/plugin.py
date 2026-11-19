@@ -526,7 +526,9 @@ class AnchorageCheckbookPlugin(MCPPlugin):
 
     plugin_name = "anchorage_checkbook"
     plugin_type = PluginType.OPEN_DATA
-    plugin_version = "1.0.0"
+    # One fork, one plugin: the plugin has no release cycle apart from the
+    # server, so this equals server_version in the config (pinned by a test).
+    plugin_version = "1.3.1"
 
     # Retry policy for transient ArcGIS failures (same policy as the
     # parcels plugin, copied per the one-fork-one-server doctrine).
