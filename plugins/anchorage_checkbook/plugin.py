@@ -114,9 +114,9 @@ REFUNDS_NOTE = (
 # sum to the cent) and, since the 2026-10-16 snapshot, a scattered 10-30%
 # of FY2026 rows across every fiscal period on three tables. WHICH years
 # and tables are affected changes with each republish (FY2023 was on all
-# five tables in August 2026; by October the payroll tables had lost it
-# and gained FY2026) -- which is why dedup filters on the flag, never on
-# a year.
+# five tables in August 2026; by October the payroll tables had lost the
+# FLAG on it, though not the second copy -- see PAYROLL_FY2023_NOTE) --
+# which is why dedup filters on the flag, never on a year.
 DUPLICATE_WARNING = (
     "**WARNING -- DUPLICATES INCLUDED:** the default Duplicate='No' "
     "filter is disabled for this response. The upstream ETL loads some "
@@ -148,8 +148,9 @@ CAVEAT_TRUNCATED = "TRUNCATED"
 CAVEAT_NO_ROWS_MATCHED = "NO_ROWS_MATCHED"
 CAVEAT_NULL_PAYEE_GROUP = "NULL_PAYEE_GROUP"
 
-# What a NULL payee actually is on table 0: ~52k post-dedup rows that are
-# journal entries, fund transfers and accounting lines. Rendered as a
+# What a NULL payee actually is on table 0: ~52k post-dedup rows (~70k
+# with the FY2026 blank form described below) that are journal entries,
+# fund transfers and accounting lines. Rendered as a
 # blank cell it reads as "a vendor whose name we don't know", and when it
 # is grouped and ranked it reads as the largest vendor of all.
 #
@@ -1211,7 +1212,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
 
         ~52k post-dedup rows in table 0 are true-NULL journal entries,
         fund transfers, and accounting lines, and the October 2026 load
-        stores the FY2026 ones as '' instead. Every vendor-facing query
+        stores the FY2026 ones (~18k more, ~70k in all) as '' instead. Every vendor-facing query
         excludes both forms explicitly; a blank payee ranked by net
         total otherwise comes out as the largest vendor of all.
         """
@@ -1431,6 +1432,15 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         for field_name in validated.split(","):
             self._check_field_exists(info, field_name, "out_fields")
         return validated
+
+    @staticmethod
+    def _returns_location(info: TableInfo, out_fields: str) -> bool:
+        """Whether a validated out_fields list returns Location. The
+        billing-address caveat is about that column, so it is emitted only
+        for a response that carries it."""
+        if "Location" not in info.all_fields:
+            return False
+        return out_fields == "*" or "Location" in out_fields.split(",")
 
     def _validate_order_by(self, info: TableInfo, order_by: Any) -> str:
         validated = OrderByValidator.validate(str(order_by or ""))
@@ -2884,7 +2894,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     f"Table {info.id} is EMPTY upstream (0 rows).",
                 )
             )
-        if "Location" in self._default_out_fields(info, include_dup):
+        if self._returns_location(info, out_fields):
             caveats.append(self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE))
 
         if total == 0:
@@ -3124,7 +3134,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                     f"Table {info.id} is EMPTY upstream (0 rows).",
                 )
             )
-        if "Location" in self._default_out_fields(info, include_dup):
+        if self._returns_location(info, out_fields):
             caveats.append(self._caveat(CAVEAT_LOCATION_IS_BILLING, LOCATION_NOTE))
 
         if total == 0:
@@ -3241,9 +3251,15 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 "gap": {
                     "type": "string",
                     "description": (
-                        "On KNOWN_GAP: which documented gap this is "
-                        "(revenue_fy2024, fy2026_partial, "
-                        "procurement_fy2025_outlier)."
+                        "On KNOWN_GAP: which documented gap this is. "
+                        "One of revenue_fy2024, "
+                        "revenue_fy2024_confirmed_absent, "
+                        "revenue_fy2026_includes_2024_file, "
+                        "procurement_fy2025_outlier, "
+                        "procurement_fy2026_absent, "
+                        "payroll_fy2023_double_loaded, fy2026_partial, "
+                        "fy2026_bare_codes, fy2026_bare_codes_unmerged, "
+                        "fy2026_bare_codes_raw_where."
                     ),
                 },
                 "periods": {
@@ -3759,6 +3775,19 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 "including on FY2026 rows, which store the bare code."
             ),
         }
+        gl_account_schema = {
+            "type": "string",
+            "description": (
+                "G/L account filter, case-insensitive substring matched "
+                "against the 'code : label' string -- an account code "
+                "or a label fragment both work, including on FY2026 "
+                "rows, which store the bare code."
+            ),
+        }
+        process_type_schema = {
+            "type": "string",
+            "description": "Procurement (table 3) only: process type substring.",
+        }
         limit_schema = lambda default, maximum: {  # noqa: E731
             "type": "integer",
             "default": default,
@@ -3861,13 +3890,8 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                         "fiscal_period": fiscal_period_schema,
                         "business_area": business_area_schema,
                         "fund": fund_schema,
-                        "gl_account": {
-                            "type": "string",
-                            "description": (
-                                "G/L account filter, substring against "
-                                "the 'code : label' string."
-                            ),
-                        },
+                        "gl_account": gl_account_schema,
+                        "process_type": process_type_schema,
                         "vendor_contains": {
                             "type": "string",
                             "description": (
@@ -3984,19 +4008,8 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                         "fiscal_period": fiscal_period_schema,
                         "business_area": business_area_schema,
                         "fund": fund_schema,
-                        "gl_account": {
-                            "type": "string",
-                            "description": (
-                                "G/L account filter, substring against "
-                                "the 'code : label' string."
-                            ),
-                        },
-                        "process_type": {
-                            "type": "string",
-                            "description": (
-                                "Procurement (table 3) only: process type substring."
-                            ),
-                        },
+                        "gl_account": gl_account_schema,
+                        "process_type": process_type_schema,
                         "vendor_contains": {
                             "type": "string",
                             "description": (

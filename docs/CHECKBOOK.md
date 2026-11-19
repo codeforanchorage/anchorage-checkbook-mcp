@@ -47,8 +47,19 @@ one code, and the `fund` / `gl_account` / `business_area` filters
 match both. Regenerate the map after a republish with
 `python scripts/refresh_code_labels.py` (the Business_Area
 crosswalk is derived by matching FY2026 payroll totals per code to
-the rollup per department, to the cent). A raw `query_checkbook`
-WHERE is not rewritten — filter FY2026 there by code.
+the rollup per department, to the cent). A filter value may be a
+label fragment, a code, or the displayed `code : label` string copied
+back out of a result. A raw `query_checkbook` WHERE is not rewritten —
+filter FY2026 there by code. Two `KNOWN_GAP` caveats flag it:
+`gap: fy2026_bare_codes` when bare codes were resolved in the returned
+rows, and `gap: fy2026_bare_codes_raw_where` whenever the WHERE names
+one of the three coded fields, which is the case where FY2026 rows
+drop out of a label match and nothing comes back to show it.
+
+**Filter values are literal.** `%`, `_` and `\` in a structured filter
+(`vendor_contains`, `name_contains`, `fund`, …) are escaped, so they
+match themselves rather than acting as LIKE wildcards. Only a raw
+`query_checkbook` WHERE can use wildcards.
 
 ## Tools
 
@@ -67,7 +78,7 @@ case-sensitive everywhere.
 | `top_vendors(fiscal_year, business_area, table, n)` | Ranking wrapper; excludes NULL/blank payees and the `'Refunds'` label, and says so. |
 | `get_line_items(table, …filters, order_by, limit, offset)` | Raw rows via structured filters only; compact pipe-delimited table; hard cap 500 with a **bookended** TRUNCATED banner quoting the true match count. |
 | `list_field_values(table, field, limit)` | Distinct values of a dimension field; splits `code : label`; notes that periods 13–16 are year-end adjustments. |
-| `query_checkbook(table, where, out_fields, order_by, limit, offset)` | Escape hatch. WHERE validated against injection *shapes* (`UNION SELECT`), never bare tokens — vendors like `Credit Union 1` and `IBEW Local Union 1547` are queryable. Still injects `Duplicate='No'`; rejects `PubDate` date filters. |
+| `query_checkbook(table, where, out_fields, order_by, limit, offset)` | Escape hatch. WHERE validated against injection *shapes* (`UNION SELECT`), never bare tokens — vendors like `Credit Union 1` and `IBEW Local Union 1547` are queryable. Still injects `Duplicate='No'`; rejects `PubDate` date filters and unbalanced parentheses (which could otherwise close the wrapper and bypass the duplicate filter). A page whose `offset` is past the last matching row says so instead of reporting that nothing matched. |
 
 ## Configuration
 

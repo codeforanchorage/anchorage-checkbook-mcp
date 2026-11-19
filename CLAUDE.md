@@ -96,7 +96,7 @@ Two invariants worth knowing before editing a tool:
 - **Build the structured half OUTSIDE any `if rows:` branch.** Every converted tool renders its markdown table inside a non-empty branch; building `structured` there too would mean a query that matched nothing advertises a schema and returns nothing — a conformance break invisible to happy-path tests, and zero-result queries are common here (a vendor spelling that does not exist, a fiscal year with no rows).
 - **Caveats come from ONE list.** `_caveat()` builds them; the text prints `_caveat_messages()` and the structured half emits the objects. A test asserts every structured caveat message appears in the text, so the two channels cannot drift.
 
-Caveat codes are stable and callers may branch on them: `NET_OF_OFFSETS`, `DUPLICATES_FILTERED`, `DUPLICATES_INCLUDED`, `ADJUSTMENT_PERIOD`, `VENDOR_SPELLING_VARIANTS`, `KNOWN_GAP`, `LOCATION_IS_BILLING`, `PERIOD_SCALE`, `TABLE_EMPTY`, `REFUNDS_LABEL`, `TRUNCATED`.
+Caveat codes are stable and callers may branch on them: `NET_OF_OFFSETS`, `DUPLICATES_FILTERED`, `DUPLICATES_INCLUDED`, `ADJUSTMENT_PERIOD`, `VENDOR_SPELLING_VARIANTS`, `KNOWN_GAP`, `LOCATION_IS_BILLING`, `PERIOD_SCALE`, `TABLE_EMPTY`, `REFUNDS_LABEL`, `TRUNCATED`, `NO_ROWS_MATCHED`, `NULL_PAYEE_GROUP`. A `KNOWN_GAP` caveat also carries a `gap` value naming which gap; the output schema lists them, and a test fails if the plugin emits one the schema does not describe.
 
 ## FY2026 bare codes
 

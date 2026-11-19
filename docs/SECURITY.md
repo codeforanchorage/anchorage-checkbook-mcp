@@ -128,7 +128,11 @@ apply here:
   scans the remainder for injection **shapes** with word-boundary
   regexes (`UNION ... SELECT`, `INSERT INTO`, `DROP TABLE`, `EXEC(`,
   …), plus forbidden substrings (`;`, `--`, `/*`, `@@`, `xp_`, `sp_`)
-  and a 2000-char cap. A quoted data value can therefore never trip
+  and a 2000-char cap. Parentheses must balance and never close below
+  depth zero: the clause is combined as `(Duplicate='No') AND
+  (<clause>)`, and `1=1) OR (1=1` would otherwise close that wrapper
+  and OR its way past the duplicate filter while the response still
+  reported duplicates as excluded. A quoted data value can therefore never trip
   the scan, and a bare token that is legal in a vendor name never
   matches. **A regression here fails closed in the wrong direction:**
   it would start calling real municipal vendors SQL injection, so
@@ -143,6 +147,9 @@ apply here:
 - **Structured-parameter tools never see caller SQL.** The other seven
   tools take typed filters and the server composes the WHERE clause
   itself with doubled-quote escaping (`_sql_quote`, `_escape_like`).
+  `_escape_like` also escapes `%`, `_` and `\` and adds an `ESCAPE`
+  clause when it had to, so a filter value cannot widen its own match
+  with LIKE wildcards.
 - **`PubDate` filters are rejected** wherever they appear — it is the
   ETL snapshot stamp, identical on every row, so a date filter on it
   matches everything or nothing.

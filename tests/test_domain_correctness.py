@@ -404,3 +404,60 @@ class TestLikeWildcardsAreData:
         assert plugin._contains_clause("Vendor_Name", r"A\B") == (
             r"Vendor_Name LIKE '%A\\B%' ESCAPE '\'"
         )
+
+
+class TestLocationCaveatFollowsTheReturnedFields:
+    """LOCATION_IS_BILLING qualifies the Location column. Attached to a
+    response that does not carry the column, it warns about nothing."""
+
+    async def _rows(self, plugin, tool, args):
+        with (
+            patch.object(
+                plugin,
+                "_query_table",
+                AsyncMock(return_value=([{"Amount": 5}], False)),
+            ),
+            patch.object(plugin, "_fetch_count", AsyncMock(return_value=1)),
+        ):
+            _, structured = await tool(args)
+        return codes(structured)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("out_fields", [None, "*", "Amount,Location"])
+    async def test_emitted_when_location_is_returned(self, plugin, out_fields):
+        args = {"table": 0, "out_fields": out_fields}
+        assert "LOCATION_IS_BILLING" in await self._rows(
+            plugin, plugin._get_line_items, args
+        )
+        assert "LOCATION_IS_BILLING" in await self._rows(
+            plugin, plugin._query_checkbook, {**args, "where": "1=1"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_absent_when_location_is_not_returned(self, plugin):
+        args = {"table": 0, "out_fields": "Vendor_Name,Amount"}
+        assert "LOCATION_IS_BILLING" not in await self._rows(
+            plugin, plugin._get_line_items, args
+        )
+        assert "LOCATION_IS_BILLING" not in await self._rows(
+            plugin, plugin._query_checkbook, {**args, "where": "1=1"}
+        )
+
+
+class TestSchemasDescribeWhatTheToolsDo:
+    def test_every_emitted_gap_is_listed_in_the_output_schema(self, plugin):
+        import inspect
+        import re
+
+        import plugins.anchorage_checkbook.plugin as module
+
+        emitted = set(re.findall(r'gap="([a-z0-9_]+)"', inspect.getsource(module)))
+        described = plugin._CAVEATS_SCHEMA["items"]["properties"]["gap"]["description"]
+        assert emitted and not {g for g in emitted if g not in described}
+
+    def test_spending_stats_declares_every_filter_it_accepts(self, plugin):
+        tools = {t.name: t for t in plugin.get_tools()}
+        props = tools["spending_stats"].input_schema["properties"]
+        for arg in ("business_area", "fund", "gl_account", "process_type"):
+            assert arg in props
+        assert "FY2026" in props["gl_account"]["description"]

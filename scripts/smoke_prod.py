@@ -649,6 +649,81 @@ try:
 except Exception as e:
     check("every figure is declared NET", False, repr(e))
 
+try:
+    # FY2026 stores Fund as the bare code. A canonical 'code : label' value
+    # copied back out of a result must still reach those rows.
+    r = call_tool(
+        "spending_stats",
+        {"table": 0, "fiscal_year": 2026, "fund": "101000 : Areawide General"},
+    )
+    sc = structured_of(r)
+    check(
+        "a canonical 'code : label' fund value reaches FY2026 rows",
+        (sc["rows"][0].get("row_count") or 0) > 0,
+        f"{sc['rows'][0].get('row_count')} rows",
+    )
+except Exception as e:
+    check("a canonical fund value reaches FY2026 rows", False, repr(e))
+
+try:
+    # A raw WHERE is not rewritten for bare codes, so FY2026 rows drop out
+    # of a label match and no bare code comes back to say so. The caveat is
+    # keyed on the WHERE naming a coded field instead.
+    r = call_tool(
+        "query_checkbook",
+        {"table": 0, "where": "Fund LIKE '%Areawide General%'", "limit": 1},
+    )
+    sc = structured_of(r)
+    check(
+        "a raw WHERE on a coded field carries the bare-code caveat",
+        any(c.get("gap") == "fy2026_bare_codes_raw_where" for c in sc["caveats"]),
+        "FY2026 rows are missing from a label match",
+    )
+    validate_structured("query_checkbook coded WHERE", "query_checkbook", sc)
+except Exception as e:
+    check("a raw WHERE on a coded field carries the caveat", False, repr(e))
+
+try:
+    # `1=1) OR (1=1` would close the wrapper around the caller's clause
+    # and OR its way past the injected Duplicate='No' filter.
+    r = call_tool("query_checkbook", {"table": 0, "where": "1=1) OR (1=1"})
+    msg = text_of(r)
+    check(
+        "unbalanced parentheses cannot escape the duplicate filter",
+        r["result"].get("isError") is True and "parentheses" in msg,
+        msg[:90],
+    )
+except Exception as e:
+    check("unbalanced parentheses are refused", False, repr(e))
+
+try:
+    # '%' in a filter value is data, not a wildcard: no vendor is named
+    # with one, so this must match nothing rather than everything.
+    r = call_tool("search_by_vendor", {"name_contains": "%%%", "table": 0})
+    sc = structured_of(r)
+    check(
+        "a LIKE wildcard in a filter value is literal",
+        any(c["code"] == "NO_ROWS_MATCHED" for c in sc["caveats"]),
+        "'%%%' matched no vendor",
+    )
+except Exception as e:
+    check("a LIKE wildcard in a filter value is literal", False, repr(e))
+
+try:
+    # A page past the end is not the same finding as "nothing matched".
+    r = call_tool(
+        "get_line_items",
+        {"table": 0, "fiscal_year": 2025, "limit": 1, "offset": 100000000},
+    )
+    msg = text_of(r)
+    check(
+        "an offset past the end says so, not 'no rows matched'",
+        "past the end" in msg and "NO ROWS MATCHED" not in msg,
+        msg[:90].replace("\n", " "),
+    )
+except Exception as e:
+    check("an offset past the end says so", False, repr(e))
+
 
 # ── 7. modern era (MCP 2026-07-28: stateless, per-request _meta) ──────────
 # Everything above rides the legacy initialize handshake. claude.ai and

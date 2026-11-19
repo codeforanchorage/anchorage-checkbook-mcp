@@ -31,9 +31,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # The version AWS Lambda runs, and the one scripts/deploy.sh installs
-  # wheels for. CI tests what production executes.
-  PYTHON_VERSION: "3.11"
+  # The version AWS Lambda runs (`runtime` in terraform/aws/main.tf), and
+  # the one scripts/deploy.sh installs wheels for (`--python-version`).
+  # CI tests what production executes: keep all three equal.
+  PYTHON_VERSION: "3.14"
 
 jobs:
   lint:
@@ -51,7 +52,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -e ".[dev]"
 
-      # Scoped to the same four directories as .pre-commit-config.yaml.
+      # Scoped to the same two directories as .pre-commit-config.yaml.
       # scripts/ is deliberately outside it: those entry points must set
       # sys.path before importing from core/, which is an unavoidable E402.
       # The version is PINNED in pyproject.toml [dev], not floating. A
