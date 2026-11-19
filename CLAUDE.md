@@ -115,8 +115,18 @@ Three things depend on it, each pinned in `tests/test_bare_codes.py`:
 - **Rows and value lists** show the canonical form (`code : label`, or the department
   name). An unknown code is shown as the code, never guessed.
 
-A raw `query_checkbook` WHERE is NOT rewritten; the `KNOWN_GAP` caveat
-(`gap: fy2026_bare_codes`) says so whenever bare codes were resolved.
+A filter value may be a label fragment, a code, or the displayed canonical
+`code : label` string copied back out of a result; all three reach both forms.
+
+A raw `query_checkbook` WHERE is NOT rewritten. Two `KNOWN_GAP` caveats cover
+it: `gap: fy2026_bare_codes` whenever bare codes were resolved in the rows, and
+`gap: fy2026_bare_codes_raw_where` whenever the WHERE itself names a coded
+field -- the case where FY2026 rows drop out and no bare code comes back to
+trigger the first one.
+
+The structured `query` block echoes only filters the tool APPLIED
+(`_query_block` takes the applied subset, never the raw arguments), so an
+ignored `fiscal_period` is never reported as a filter.
 
 ## MCP conformance invariants
 

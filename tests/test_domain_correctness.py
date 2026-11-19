@@ -320,3 +320,87 @@ class TestQualificationsTravelWithTheNumber:
         ):
             text, _structured = await plugin._spending_stats({"table": 0})
         assert "net_sum_Amount" in text
+
+
+# ── paging past the end, the snapshot probe, raw-WHERE parens, LIKE ──
+
+
+class TestOffsetPastTheEnd:
+    @pytest.mark.asyncio
+    async def test_empty_page_does_not_claim_nothing_matched(self, plugin):
+        with (
+            patch.object(plugin, "_query_table", AsyncMock(return_value=([], False))),
+            patch.object(plugin, "_fetch_count", AsyncMock(return_value=250)),
+        ):
+            text, structured = await plugin._get_line_items({"table": 0, "offset": 500})
+        assert "No rows matched" not in text
+        assert "offset=500 is past the end of the 250 row(s)" in text
+        assert structured["summary"]["total_count"] == 250
+
+    @pytest.mark.asyncio
+    async def test_a_true_miss_still_says_so(self, plugin):
+        with (
+            patch.object(plugin, "_query_table", AsyncMock(return_value=([], False))),
+            patch.object(plugin, "_fetch_count", AsyncMock(return_value=0)),
+        ):
+            text, _ = await plugin._get_line_items({"table": 0, "offset": 500})
+        assert "NO ROWS MATCHED" in text
+
+
+class TestPubdateProbe:
+    @pytest.mark.asyncio
+    async def test_a_failed_probe_is_retried_not_remembered(self, plugin):
+        plugin._pubdate_cache = {}
+        with patch.object(
+            plugin, "_query_table", AsyncMock(side_effect=RuntimeError("blip"))
+        ) as failing:
+            assert await plugin._pubdate_snapshot(0) is None
+            # Held off, not re-probed on every call during an outage.
+            assert await plugin._pubdate_snapshot(0) is None
+            assert failing.call_count == 1
+        plugin._pubdate_retry_at[0] = 0.0  # the hold-off has elapsed
+        ok = AsyncMock(return_value=([{"PubDate": 1785628800000}], False))
+        with patch.object(plugin, "_query_table", ok):
+            assert await plugin._pubdate_snapshot(0) == "2026-08-02"
+            assert await plugin._pubdate_snapshot(0) == "2026-08-02"
+        assert ok.call_count == 1  # a real answer IS cached
+
+
+class TestRawWhereCannotEscapeTheDuplicateFilter:
+    @pytest.mark.parametrize(
+        "where",
+        ["1=1) OR (1=1", "(Amount > 0", "Amount > 0)", ")("],
+    )
+    def test_unbalanced_parentheses_are_rejected(self, where):
+        from core.interfaces import ToolInputError
+        from plugins.anchorage_checkbook.where_validator import (
+            CheckbookWhereValidator,
+        )
+
+        with pytest.raises(ToolInputError, match="parentheses"):
+            CheckbookWhereValidator.validate(where)
+
+    def test_parentheses_inside_a_literal_are_data(self):
+        from plugins.anchorage_checkbook.where_validator import (
+            CheckbookWhereValidator,
+        )
+
+        clause = "(Vendor_Name = 'ACME (ALASKA' OR Amount > 0)"
+        assert CheckbookWhereValidator.validate(clause) == clause
+
+
+class TestLikeWildcardsAreData:
+    def test_plain_fragment_is_unchanged(self, plugin):
+        assert plugin._contains_clause("Vendor_Name", "O'Brien") == (
+            "Vendor_Name LIKE '%O''Brien%'"
+        )
+
+    def test_percent_and_underscore_are_escaped(self, plugin):
+        assert plugin._contains_clause("Vendor_Name", "A_1 100%") == (
+            r"Vendor_Name LIKE '%A\_1 100\%%' ESCAPE '\'"
+        )
+
+    def test_the_escape_character_itself_is_escaped(self, plugin):
+        assert plugin._contains_clause("Vendor_Name", r"A\B") == (
+            r"Vendor_Name LIKE '%A\\B%' ESCAPE '\'"
+        )

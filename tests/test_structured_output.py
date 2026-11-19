@@ -541,3 +541,61 @@ class TestSchemaDeclarations:
         for tool in plugin.get_tools():
             if tool.output_schema:
                 walk(tool.output_schema)
+
+
+# ── the query block echoes only filters that were applied ───────────
+
+
+class TestQueryBlockEchoesAppliedFiltersOnly:
+    """`query.fiscal_year` / `query.fiscal_period` describe the WHERE. A
+    tool that ignores an argument must not report it as a filter."""
+
+    @pytest.mark.asyncio
+    async def test_top_vendors_ignores_fiscal_period(self, plugin):
+        rows = [{"Vendor_Name": "A", "net_total": 1.0, "row_count": 1}]
+        with patch.object(plugin, "_query_statistics", AsyncMock(return_value=rows)):
+            _, structured = await plugin._top_vendors(
+                {"fiscal_year": 2025, "fiscal_period": 14}
+            )
+        validate(structured, schema_for(plugin, "top_vendors"))
+        query = structured["query"]
+        assert "Month_Fiscal_Period" not in query["where"]
+        assert query["fiscal_period"] is None
+        assert query["is_adjustment_period"] is None
+        assert query["fiscal_year"] == "2025"
+
+    @pytest.mark.asyncio
+    async def test_list_field_values_applies_no_year_or_period(self, plugin):
+        with patch.object(
+            plugin,
+            "_query_table",
+            AsyncMock(return_value=([{"Fund": "101000"}], False)),
+        ):
+            _, structured = await plugin._list_field_values(
+                {"table": 0, "field": "Fund", "fiscal_year": 2025, "fiscal_period": 99}
+            )
+        validate(structured, schema_for(plugin, "list_field_values"))
+        assert structured["query"]["fiscal_year"] is None
+        assert structured["query"]["fiscal_period"] is None
+
+    @pytest.mark.asyncio
+    async def test_search_by_vendor_echoes_year_but_not_period(self, plugin):
+        with patch.object(plugin, "_query_statistics", AsyncMock(return_value=[])):
+            _, structured = await plugin._search_by_vendor(
+                {"name_contains": "x", "fiscal_year": "2025", "fiscal_period": 99}
+            )
+        validate(structured, schema_for(plugin, "search_by_vendor"))
+        assert structured["query"]["fiscal_year"] == "2025"
+        assert structured["query"]["fiscal_period"] is None
+
+    @pytest.mark.asyncio
+    async def test_fiscal_year_is_echoed_as_applied(self, plugin):
+        rows = [{"sum_Amount": 1.0, "row_count": 1}]
+        with patch.object(plugin, "_query_statistics", AsyncMock(return_value=rows)):
+            _, structured = await plugin._spending_stats(
+                {"table": 0, "fiscal_year": " 2025 ", "fiscal_period": "13"}
+            )
+        validate(structured, schema_for(plugin, "spending_stats"))
+        assert structured["query"]["fiscal_year"] == "2025"
+        assert structured["query"]["fiscal_period"] == 13
+        assert structured["query"]["is_adjustment_period"] is True

@@ -108,6 +108,20 @@ class TestFilters:
             "Fund LIKE '%141000%'"
         )
 
+    def test_displayed_canonical_value_reaches_fy2026(self, plugin):
+        """Results show '101000 : Areawide General'; passing that back as
+        the filter must still match FY2026's bare '101000'."""
+        clause = plugin._coded_contains_clause("Fund", "101000 : Areawide General")
+        assert clause == (
+            "Fund LIKE '%101000 : Areawide General%' OR Fund IN ('101000')"
+        )
+
+    def test_displayed_canonical_gl_value_covers_both_paddings(self, plugin):
+        clause = plugin._coded_contains_clause(
+            "G_L_Account", "511330 : Gasoline Issues"
+        )
+        assert "IN ('511330', '0000511330')" in clause, clause
+
     def test_or_is_parenthesised_when_combined(self, plugin):
         clauses, _ = plugin._structured_where(
             TABLES[0], {"fiscal_year": 2026, "business_area": "Fire"}
@@ -341,3 +355,41 @@ class TestNewKnownGaps:
             assert gap in {n["gap"] for n in notes}
         notes = plugin._fiscal_notices(TABLES[4], ["2025"])
         assert gap not in {n["gap"] for n in notes}
+
+
+class TestRawWhere:
+    """query_checkbook does not rewrite a WHERE, so it has to say so in the
+    case that matters: a filter on a coded field, where FY2026 rows drop
+    out and no bare code comes back to trigger the other caveat."""
+
+    async def _query(self, plugin, where, records):
+        with (
+            patch.object(
+                plugin, "_query_table", AsyncMock(return_value=(records, False))
+            ),
+            patch.object(plugin, "_fetch_count", AsyncMock(return_value=len(records))),
+        ):
+            return await plugin._query_checkbook({"table": 0, "where": where})
+
+    async def test_label_filter_on_a_coded_field_is_flagged(self, plugin):
+        text, structured = await self._query(
+            plugin,
+            "Fund LIKE '%Roads%'",
+            [{"Fund": "141000 : Anchorage Roads & Drainage SA", "Amount": 5.0}],
+        )
+        assert gaps(structured) >= {"fy2026_bare_codes_raw_where"}
+        caveat = next(
+            c
+            for c in structured["caveats"]
+            if c.get("gap") == "fy2026_bare_codes_raw_where"
+        )
+        assert "Fund" in caveat["message"]
+        assert caveat["message"] in text
+
+    async def test_a_literal_naming_a_coded_field_is_not_flagged(self, plugin):
+        _, structured = await self._query(
+            plugin,
+            "Vendor_Name = 'Fund' AND Fiscal_Year = '2025'",
+            [{"Vendor_Name": "Fund", "Amount": 1.0}],
+        )
+        assert "fy2026_bare_codes_raw_where" not in gaps(structured)

@@ -28,6 +28,7 @@ import difflib
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -542,6 +543,8 @@ class AnchorageCheckbookPlugin(MCPPlugin):
     # get_table_schema reports distinct-value counts up to this many,
     # then '>N' (Vendor_Name has tens of thousands of spellings).
     CARDINALITY_CAP = 1000
+    # How long a FAILED PubDate probe is held off before it is retried.
+    PUBDATE_RETRY_AFTER_S = 60.0
 
     SCHEMA_SNAPSHOT_PATH = Path(__file__).parent / "schema" / "checkbook_tables.json"
     CODE_LABELS_PATH = Path(__file__).parent / "schema" / "code_labels.json"
@@ -568,6 +571,9 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         # not transaction time). Filled lazily, one query per table per
         # process lifetime.
         self._pubdate_cache: Dict[int, Optional[str]] = {}
+        # A FAILED probe is not cached like an answer: it is only held
+        # off until this monotonic time, then retried.
+        self._pubdate_retry_at: Dict[int, float] = {}
         # Field types from the vendored schema snapshot, loaded lazily
         # for get_table_schema.
         self._snapshot_types: Optional[Dict[int, Dict[str, str]]] = None
@@ -778,16 +784,28 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         exposed as a filterable axis. None for empty tables or when the
         probe fails (provenance then omits the date -- degraded > down).
         """
-        if table_id not in self._pubdate_cache:
-            value = None
-            try:
-                records, _ = await self._query_table(table_id, "1=1", PUBDATE_FIELD, 1)
-                if records:
-                    value = self._ms_to_iso_smart(records[0].get(PUBDATE_FIELD))
-            except Exception as e:
-                logger.warning(f"PubDate probe failed for table {table_id}: {e}")
-            self._pubdate_cache[table_id] = value
-        return self._pubdate_cache[table_id]
+        if table_id in self._pubdate_cache:
+            return self._pubdate_cache[table_id]
+        # A failed probe must not be remembered as "no snapshot date" for
+        # the life of a warm Lambda: one upstream blip would otherwise
+        # leave every later response reading "unavailable". It is held
+        # off briefly instead, so an outage does not add a doomed probe
+        # (and its retries) to every call.
+        if time.monotonic() < self._pubdate_retry_at.get(table_id, 0.0):
+            return None
+        try:
+            records, _ = await self._query_table(table_id, "1=1", PUBDATE_FIELD, 1)
+        except Exception as e:
+            logger.warning(f"PubDate probe failed for table {table_id}: {e}")
+            self._pubdate_retry_at[table_id] = (
+                time.monotonic() + self.PUBDATE_RETRY_AFTER_S
+            )
+            return None
+        value = None
+        if records:
+            value = self._ms_to_iso_smart(records[0].get(PUBDATE_FIELD))
+        self._pubdate_cache[table_id] = value
+        return value
 
     @staticmethod
     def _split_code_label(value: Any) -> Tuple[Optional[str], Any]:
@@ -879,6 +897,36 @@ class AnchorageCheckbookPlugin(MCPPlugin):
     def _bare_code_caveat(self) -> Dict[str, Any]:
         return self._caveat(CAVEAT_KNOWN_GAP, BARE_CODE_NOTE, gap="fy2026_bare_codes")
 
+    def _raw_where_coded_caveat(self, where: str) -> Optional[Dict[str, Any]]:
+        """Caveat for a raw WHERE that filters on a coded field.
+
+        The bare-code caveat fires when bare codes come BACK in the rows,
+        which is exactly when a raw filter did not hit the problem. The
+        failure is the opposite case: `Fund LIKE '%Roads%'` returns only
+        pre-FY2026 rows, no bare code is seen, and FY2026 is silently
+        missing. So this one is keyed on the clause, not on the result.
+        String literals are masked first, so a vendor named 'Fund' does
+        not trip it.
+        """
+        masked = CheckbookWhereValidator._mask_string_literals(where)
+        hit = [f for f in CODED_FIELDS if re.search(rf"\b{f}\b", masked)]
+        if not hit:
+            return None
+        return self._caveat(
+            CAVEAT_KNOWN_GAP,
+            f"This WHERE filters on {', '.join(hit)}, which FY2026 rows "
+            f"store as a BARE CODE ('101000', '0000200050', '4000') where "
+            f"earlier years store a 'code : label' string or a department "
+            f"name. A raw WHERE is NOT rewritten: a label or exact "
+            f"'code : label' comparison does not match FY2026 rows, so "
+            f"they may be MISSING from this result. Match on the code with "
+            f"LIKE (e.g. Fund LIKE '%141000%' reaches both forms; for "
+            f"Business_Area add the code, e.g. OR Business_Area = '4000'), "
+            f"or use the fund / gl_account / business_area filters of "
+            f"get_line_items and spending_stats, which match both.",
+            gap="fy2026_bare_codes_raw_where",
+        )
+
     def _coded_contains_clause(self, field_name: str, value: str) -> str:
         """Substring filter on a coded field that reaches BOTH forms.
 
@@ -886,6 +934,11 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         not FY2026's bare '141000'. So every code whose label contains
         the fragment is added as an exact IN match. A code fragment needs
         nothing extra: LIKE '%141000%' already matches both forms.
+
+        The fragment is also matched against the canonical 'code : label'
+        string, because that is the form the tools DISPLAY: a caller who
+        copies '141000 : Anchorage Roads & Drainage SA' out of a result
+        and passes it back as the filter must reach FY2026 too.
         """
         base = self._contains_clause(field_name, value)
         needle = value.lower()
@@ -893,6 +946,10 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             code
             for code, label in self._code_labels(field_name).items()
             if needle in label.lower()
+            or (
+                needle not in code
+                and needle in f"{code}{CODE_LABEL_SEP}{label}".lower()
+            )
         )
         if not codes:
             return base
@@ -1235,15 +1292,40 @@ class AnchorageCheckbookPlugin(MCPPlugin):
     def _sql_quote(value: str) -> str:
         return "'" + str(value).replace("'", "''") + "'"
 
-    @staticmethod
-    def _escape_like(value: str) -> str:
-        return str(value).replace("'", "''")
+    # Escape character for LIKE wildcards in caller-supplied fragments.
+    LIKE_ESCAPE = "\\"
+
+    @classmethod
+    def _escape_like(cls, value: str) -> Tuple[str, bool]:
+        """(pattern body, needs_escape_clause) for a LIKE fragment.
+
+        '%' and '_' in a fragment are DATA, not wildcards: without this,
+        'A_1' also matches 'AB1' and '100%' matches every '100...'. They
+        are escaped, and the caller adds an ESCAPE clause only when
+        something was escaped, so the ordinary fragment produces exactly
+        the clause it always did. (Verified live 2026-11-19: the service
+        honours LIKE ... ESCAPE.)
+        """
+        text = str(value)
+        esc = cls.LIKE_ESCAPE
+        needs = any(ch in text for ch in ("%", "_", esc))
+        if needs:
+            text = (
+                text.replace(esc, esc + esc)
+                .replace("%", esc + "%")
+                .replace("_", esc + "_")
+            )
+        return text.replace("'", "''"), needs
 
     def _contains_clause(self, field_name: str, value: Any) -> str:
         """Case-insensitive substring match. LIKE is case-insensitive
         on this backend (verified: '%chugach%' and the UPPER-wrapped
         variant both return 2,401 rows) -- never wrap in UPPER()."""
-        return f"{field_name} LIKE '%{self._escape_like(value)}%'"
+        body, needs_escape = self._escape_like(value)
+        clause = f"{field_name} LIKE '%{body}%'"
+        if needs_escape:
+            clause += f" ESCAPE '{self.LIKE_ESCAPE}'"
+        return clause
 
     @staticmethod
     def _combine_where(*clauses: Optional[str]) -> str:
@@ -1685,19 +1767,26 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         periods 13-16 are year-end adjustments, and a consumer handed
         "period 14" alongside anything month-like will map it to
         February.
+
+        `args` must hold ONLY the filters this tool actually applied.
+        Echoing a year or period the tool ignored would have the
+        structured half claim a filter the WHERE does not contain, so
+        callers pass the applied subset, never the raw arguments.
         """
         args = args or {}
         period = args.get("fiscal_period")
         year = args.get("fiscal_year")
+        if period is not None:
+            period = self._validate_period(period)
         block: Dict[str, Any] = {
             "table": info.id,
             "table_name": info.name,
             "duplicate_filter": dedup_caveat["duplicate_filter"],
             "where": where,
-            "fiscal_year": str(year) if year is not None else None,
-            "fiscal_period": (
-                self._int_arg(args, "fiscal_period") if period is not None else None
+            "fiscal_year": (
+                self._validate_fiscal_year(year) if year is not None else None
             ),
+            "fiscal_period": period,
             "is_adjustment_period": self._is_adjustment_period(period),
             "data_snapshot": pubdate,
         }
@@ -1847,7 +1936,15 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             lines.extend(notices)
         if banner or notices:
             lines.append("")
-        if not records:
+        if not records and not no_match_note and total_count and offset:
+            # Rows exist; this page is simply past the last one. Saying
+            # "No rows matched" here would contradict total_count.
+            lines.append(
+                f"No rows on this page: offset={offset} is past the end of "
+                f"the {total_count:,} row(s) matching the filter. Use an "
+                f"offset below {total_count:,}."
+            )
+        elif not records:
             lines.append(no_match_note or "No rows matched.")
         else:
             if total_count is not None:
@@ -2572,7 +2669,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             where=where,
             dedup_caveat=dedup_caveat,
             caveats=caveats,
-            args=args,
+            args={"fiscal_year": args.get("fiscal_year")},
             limit=limit,
             pubdate=pubdate,
             combined_net=combined_net,
@@ -2735,7 +2832,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             where=where,
             dedup_caveat=dedup_caveat,
             caveats=caveats,
-            args=args,
+            args=filter_args,
             limit=n,
             pubdate=pubdate,
             combined_net=(sum(r.get("net_total") or 0 for r in rows) if rows else None),
@@ -2961,7 +3058,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 info,
                 where=where,
                 dedup_caveat=dedup_caveat,
-                args=args,
+                args={},
                 limit=limit,
                 pubdate=pubdate,
             ),
@@ -3017,6 +3114,9 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         caveats.append(self._caveat(CAVEAT_NET_OF_OFFSETS, NET_NOTE))
         if bare_seen:
             caveats.append(self._bare_code_caveat())
+        coded_where_caveat = self._raw_where_coded_caveat(user_where)
+        if coded_where_caveat:
+            caveats.append(coded_where_caveat)
         if info.status == "empty":
             caveats.append(
                 self._caveat(
@@ -3054,7 +3154,9 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 else None
             ),
             dedup_caveat=dedup_caveat,
-            args=args,
+            # No structured filters exist on this tool: the year and
+            # period live inside the raw WHERE, so none is echoed.
+            args={},
             offset=offset,
             pubdate=await self._pubdate_snapshot(info.id),
         )

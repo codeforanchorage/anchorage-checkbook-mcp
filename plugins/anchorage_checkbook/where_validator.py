@@ -103,7 +103,7 @@ class CheckbookWhereValidator:
         Returns the original clause if valid ("1=1" when empty).
         Raises ValueError on statement separators/comments or on SQL
         statement shapes outside quoted string literals, or on an
-        unbalanced quote.
+        unbalanced quote or parenthesis.
         """
         if not where:
             return "1=1"
@@ -118,6 +118,22 @@ class CheckbookWhereValidator:
             )
 
         masked = cls._mask_string_literals(where)
+
+        # Parentheses must balance and never close below depth zero. The
+        # clause is ANDed with the injected Duplicate='No' filter as
+        # `(dedup) AND (<clause>)`; a clause like `1=1) OR (1=1` would
+        # close that wrapper early and OR its way past the filter while
+        # the response still reported duplicates as excluded.
+        depth = 0
+        for ch in masked:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth < 0:
+                    break
+        if depth != 0:
+            raise ToolInputError("Unbalanced parentheses in WHERE clause")
 
         lowered = masked.lower()
         for bad in cls.FORBIDDEN_SUBSTRINGS:
