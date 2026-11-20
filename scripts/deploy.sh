@@ -102,6 +102,18 @@ if [ ! -f "config.yaml" ]; then
     exit 1
 fi
 
+# config.yaml is what gets packaged, but it is gitignored, so the clean-tree
+# check below cannot see an edit to it. It must equal the tracked copy, or
+# the build ships settings that are in no commit while BUILD_INFO.json says
+# the tree was clean.
+if ! cmp -s config.yaml config-anchorage-checkbook.yaml; then
+    echo -e "${RED}❌ Error: config.yaml differs from config-anchorage-checkbook.yaml${NC}"
+    echo "config.yaml is the file that ships; the tracked copy is the source of truth."
+    echo "Make the change in config-anchorage-checkbook.yaml, commit it, then:"
+    echo "  cp config-anchorage-checkbook.yaml config.yaml"
+    exit 1
+fi
+
 # Check if Python is available (python3 on Linux/macOS, python on Windows)
 if command -v python3 &> /dev/null; then
     PYTHON=python3

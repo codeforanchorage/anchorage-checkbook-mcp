@@ -23,6 +23,19 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def reset_checkbook_shared_state():
+    """The plugin keeps table metadata and the snapshot date at module
+    level so a warm Lambda container fetches them once. Tests build many
+    plugins against the same URL with different fakes, so that state is
+    cleared around every test."""
+    from plugins.anchorage_checkbook import plugin as checkbook
+
+    checkbook._SHARED_STATE.clear()
+    yield
+    checkbook._SHARED_STATE.clear()
+
+
+@pytest.fixture(autouse=True)
 def reset_http_handler_globals():
     """Snapshot and restore ``server.http_handler``'s module globals.
 

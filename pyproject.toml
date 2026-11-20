@@ -55,6 +55,9 @@ include = ["plugins*", "custom_plugins*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# The repo root holds stdio_bridge.py, which is not an installed package;
+# a bare `pytest` (as CI runs it) does not put the root on sys.path.
+pythonpath = ["."]
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]

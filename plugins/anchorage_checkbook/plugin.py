@@ -514,6 +514,45 @@ TABLES: Dict[int, TableInfo] = {
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+# The Lambda adapter builds a NEW plugin object for every request and shuts
+# it down afterwards (an httpx client cannot outlive the event loop of the
+# invocation that made it). Anything kept on the instance therefore lives
+# for one request, so the table metadata and the snapshot date -- plain
+# data, safe to share -- are kept here instead, keyed by service URL. A warm
+# container then pays for them once, not on every ping.
+SHARED_STATE_TTL_S = 900.0
+# A failed startup fetch is held off this long before it is tried again, so
+# an upstream outage costs one slow request per window, not every request.
+META_RETRY_AFTER_S = 60.0
+# Time budget for the startup metadata fetch. It runs inside the same Lambda
+# invocation as the request that follows, so it must leave room for it:
+# 5s here + the plugin timeout (20s) stays under the 28s Lambda timeout.
+STARTUP_META_BUDGET_S = 5.0
+
+
+@dataclass
+class _ServiceState:
+    created: float
+    live_fields: Dict[int, set] = field(default_factory=dict)
+    date_fields: Dict[int, set] = field(default_factory=dict)
+    meta_loaded: bool = False
+    meta_retry_at: float = 0.0
+    pubdate_cache: Dict[int, Optional[str]] = field(default_factory=dict)
+    pubdate_retry_at: Dict[int, float] = field(default_factory=dict)
+
+
+_SHARED_STATE: Dict[str, _ServiceState] = {}
+
+
+def _shared_state(service_url: str) -> _ServiceState:
+    now = time.monotonic()
+    state = _SHARED_STATE.get(service_url)
+    if state is None or now - state.created > SHARED_STATE_TTL_S:
+        state = _ServiceState(created=now)
+        _SHARED_STATE[service_url] = state
+    return state
+
+
 class AnchorageCheckbookPlugin(MCPPlugin):
     """Plugin for the Municipality of Anchorage Open Checkbook.
 
@@ -584,6 +623,11 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         # vendored JSON. Empty on failure: the plugin then behaves as it
         # did before the maps existed (degraded > down).
         self._code_label_maps: Optional[Dict[str, Dict[str, str]]] = None
+        # Monotonic time by which the current tool call (or the startup
+        # fetch) must be done. Every upstream request is cut off at it,
+        # so a hung upstream yields a readable error before the Lambda
+        # is killed. None outside a call.
+        self._request_deadline: Optional[float] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -599,34 +643,61 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             )
             return False
 
-        self.client = httpx.AsyncClient(timeout=self.plugin_config.timeout)
+        state = _shared_state(str(self.plugin_config.service_url))
+        self._live_fields = state.live_fields
+        self._date_fields = state.date_fields
+        self._pubdate_cache = state.pubdate_cache
+        self._pubdate_retry_at = state.pubdate_retry_at
 
-        # Reachability + schema-drift check across all six tables.
-        # Failures are logged loudly but do NOT block startup: a
-        # transient blip at cold start must not take the whole server
-        # down (degraded > down).
-        try:
-            metas = await asyncio.gather(
-                *(
-                    self._request_json(self._table_url(tid), {"f": "json"})
-                    for tid in TABLES
+        # Reachability + schema-drift check across all six tables, once
+        # per warm container rather than once per request. Failures are
+        # logged loudly but do NOT block startup: a transient blip at
+        # cold start must not take the whole server down (degraded >
+        # down). The fetch has its own short budget, and a failure is
+        # held off before the next try, so a hung upstream cannot make
+        # ping and tools/list as slow as the upstream is.
+        if not state.meta_loaded and time.monotonic() >= state.meta_retry_at:
+            self._request_deadline = time.monotonic() + STARTUP_META_BUDGET_S
+            try:
+                metas = await asyncio.gather(
+                    *(
+                        self._request_json(self._table_url(tid), {"f": "json"})
+                        for tid in TABLES
+                    )
                 )
-            )
-            for tid, meta in zip(TABLES, metas):
-                self._capture_table_meta(tid, meta)
-            self._check_schema_drift()
-        except Exception as e:
-            logger.warning(
-                "anchorage_checkbook: service unreachable at startup; "
-                "starting anyway (queries will retry per call)",
-                extra={"error": str(e)},
-            )
+                for tid, meta in zip(TABLES, metas):
+                    self._capture_table_meta(tid, meta)
+                state.meta_loaded = True
+                self._check_schema_drift()
+            except Exception as e:
+                state.meta_retry_at = time.monotonic() + META_RETRY_AFTER_S
+                logger.warning(
+                    "anchorage_checkbook: service unreachable at startup; "
+                    "starting anyway (queries will retry per call)",
+                    extra={"error": str(e)},
+                )
+            finally:
+                self._request_deadline = None
 
         self._initialized = True
         logger.info(
             f"Anchorage Checkbook plugin initialized for {self.plugin_config.city_name}"
         )
         return True
+
+    def _http(self) -> httpx.AsyncClient:
+        """The HTTP client, created on first use.
+
+        Building one loads the CA bundle into a TLS context, which costs
+        tens to hundreds of milliseconds, and the Lambda adapter builds a
+        new plugin for every request. Requests that never reach the
+        upstream (ping, tools/list, a rejected argument) should not pay
+        for it.
+        """
+        if self.client is None:
+            timeout = self.plugin_config.timeout if self.plugin_config else 30
+            self.client = httpx.AsyncClient(timeout=timeout)
+        return self.client
 
     def _capture_table_meta(self, table_id: int, meta: Dict[str, Any]) -> None:
         fields = meta.get("fields") or []
@@ -669,7 +740,7 @@ class AnchorageCheckbookPlugin(MCPPlugin):
 
     async def health_check(self) -> bool:
         try:
-            resp = await self.client.get(self._table_url(0), params={"f": "json"})
+            resp = await self._http().get(self._table_url(0), params={"f": "json"})
             return resp.status_code == 200
         except Exception as e:
             logger.error(f"Health check failed: {e}")
@@ -1507,18 +1578,39 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         bodies; raises immediately (with a rewritten, actionable
         message) on real errors.
         """
+        # ONE time budget covers every attempt. Without it three
+        # attempts at the HTTP timeout each (20s + 20s + 20s) outlive the
+        # 28s Lambda, which is then killed mid-flight: the caller gets an
+        # opaque gateway error instead of the message raised below.
+        budget = float(self.plugin_config.timeout) if self.plugin_config else 30.0
+        deadline = time.monotonic() + budget
+        if self._request_deadline is not None:
+            deadline = min(deadline, self._request_deadline)
+        out_of_time = (
+            "the upstream service did not answer within this request's "
+            "time budget (it may be slow or down -- try again shortly)"
+        )
+
         last_desc = "unknown error"
         attempt = 0
         while attempt < self.ARCGIS_MAX_ATTEMPTS:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                last_desc = out_of_time
+                break
             attempt += 1
             transient = False
             try:
                 if sum(len(str(v)) for v in params.values()) > (
                     self.MAX_GET_PARAM_CHARS
                 ):
-                    resp = await self.client.post(url, data=params)
+                    send = self._http().post(url, data=params)
                 else:
-                    resp = await self.client.get(url, params=params)
+                    send = self._http().get(url, params=params)
+                resp = await asyncio.wait_for(send, timeout=remaining)
+            except asyncio.TimeoutError:
+                last_desc = out_of_time
+                break
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 transient, last_desc = True, f"network error: {e!r}"
             else:
@@ -1548,7 +1640,10 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                         raise RuntimeError(self._arcgis_error_text(err))
             if not transient or attempt >= self.ARCGIS_MAX_ATTEMPTS:
                 break
-            await asyncio.sleep(self.ARCGIS_RETRY_BACKOFF_S * attempt)
+            backoff = self.ARCGIS_RETRY_BACKOFF_S * attempt
+            if time.monotonic() + backoff >= deadline:
+                break
+            await asyncio.sleep(backoff)
         raise RuntimeError(
             f"Feature Service request failed after {attempt} attempt(s): {last_desc}"
         )
@@ -4175,6 +4270,13 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 success=False,
                 error_message=f"Unknown tool: {tool_name}",
             )
+        # The whole tool call shares one time budget, however many
+        # upstream requests it makes, so it always answers before the
+        # Lambda timeout.
+        if self.plugin_config is not None:
+            self._request_deadline = time.monotonic() + float(
+                self.plugin_config.timeout
+            )
         try:
             result = await handler(arguments)
             # Tools that declare an outputSchema return (text, structured);
@@ -4211,3 +4313,5 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 success=False,
                 error_message=str(e) if str(e) else "Tool execution failed",
             )
+        finally:
+            self._request_deadline = None

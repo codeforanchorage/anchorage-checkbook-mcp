@@ -14,6 +14,12 @@ lambda_memory = 512
 # Lambda self-terminates before the gateway gives up.
 lambda_timeout = 28
 
+# Without this the four alarms in cloudwatch_alarms.tf change state and tell
+# no one. This is the topic the fleet POST /mcp 4xx alarm for this server
+# (defined in mcp-stats) already notifies. Staging deliberately sets none:
+# its alarms are visible in the console but do not notify.
+alarm_sns_topic_arn = "arn:aws:sns:us-west-2:420839047325:anchorage-gis-mcp-prod-alarms"
+
 api_quota_limit = 3000
 # These two feed BOTH the usage plan and the stage-wide method settings
 # (api_gateway.tf), so they are the effective throttle on the public /mcp

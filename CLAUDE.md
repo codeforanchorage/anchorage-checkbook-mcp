@@ -85,10 +85,15 @@ Two AWS sizing values are read from `config.yaml` in preference to `terraform/aw
 | Lambda (`lambda_timeout`) | 28s | self-terminates before the gateway gives up |
 | Plugin HTTP (`plugins.anchorage_checkbook.timeout`) | 20s | a hung upstream returns a readable tool error instead of the Lambda being killed mid-flight |
 
+The 20s is a budget for the **whole tool call**, not per HTTP request: `execute_tool` sets one deadline and `_request_json` cuts every attempt and retry off at it (`tests/test_upstream_time_budget.py`). The startup metadata fetch has its own 5s budget (`STARTUP_META_BUDGET_S`), because it runs in the same Lambda invocation as the request that follows: 5 + 20 stays under 28.
+
+**The plugin object lives for one request.** The Lambda adapter in `opencontext-core` builds a new plugin for every invocation and shuts it down afterwards, so nothing stored on `self` survives to the next request. Data worth keeping across a warm container (table metadata, the PubDate snapshot) lives in the module-level `_SHARED_STATE` in `plugin.py`, with a 15-minute lifetime and a 60s hold-off after a failed fetch; the HTTP client is created lazily (`_http()`), so `ping` and `tools/list` make no upstream call and build no TLS context. `scripts/local_server.py` keeps one warm plugin and does not show this.
+
 ## Deploying
 
 `./scripts/deploy.sh -e staging|prod` is the only supported path (`--yes` skips the confirmation prompt). Three rules it enforces, each of which changes how you work:
 
+- **`config.yaml` must equal `config-anchorage-checkbook.yaml`.** The shipped file is gitignored, so the clean-tree check cannot see it; the script compares the two and stops if they differ.
 - **The working tree must be a commit.** The script refuses to package uncommitted or untracked changes, so the live code always matches something in git. Commit first, then deploy. `--allow-dirty` overrides this and is for emergencies only.
 - **Dependencies come from `uv.lock`**, the versions CI tested, not from the lower bounds in `requirements.txt`. To move a dependency: `uv lock --upgrade`, run the tests, commit `uv.lock`, then deploy. The script finds `uv` on PATH or as `python -m uv`; without either it falls back to pip and `requirements.txt` with a warning, and the build is marked unlocked.
 - **Every package carries `BUILD_INFO.json`** (`commit`, `dirty`, `locked`) at its root. To see what an environment runs, read that file out of the deployed zip (`aws lambda get-function --query Code.Location`) instead of inferring it from timestamps or `serverInfo.version`.
