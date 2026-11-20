@@ -154,14 +154,16 @@ the behaviour, change the test deliberately rather than deleting it.
   legacy; a body whose `params._meta` carries
   `io.modelcontextprotocol/protocolVersion` is modern; a modern
   `MCP-Protocol-Version` header with no `_meta` is a malformed modern request, not
-  a legacy one to serve quietly. `initialize` negotiates ONLY legacy versions —
-  echoes the client's when recognized, else the spec-defined default 2025-03-26 —
-  so a client asking for 2026-07-28 on the handshake gets 2025-03-26. An absent
-  `MCP-Protocol-Version` header means that same default and is NOT an error; a
-  header naming a version served in neither era is HTTP 400 with `-32022` and the
-  supported list. `initialize` itself is exempt from that header check, or a client
-  naming an unsupported revision could never reach the handshake that would settle
-  on a supported one.
+  a legacy one to serve quietly. `initialize` negotiates ONLY legacy versions:
+  it echoes the client's `protocolVersion` when that is a legacy revision we
+  serve, answers the spec-defined default 2025-03-26 when the client names
+  none, and answers the newest legacy revision (2025-11-25) for anything else
+  -- so a client asking for 2026-07-28 on the handshake gets 2025-11-25. An
+  absent `MCP-Protocol-Version` header means 2025-03-26 and is NOT an error; a
+  header naming a version served in neither era is HTTP 400 with `-32022` and
+  the supported list. That header check applies to `initialize` too: the
+  version to negotiate goes in the body, and a client that also sends an
+  unsupported header on the handshake is refused before it.
 - **Modern-era rules** (spec 2026-07-28, tested in `tests/test_modern_protocol.py`):
   `_meta.protocolVersion` and `_meta.clientCapabilities` are required (`-32602`,
   HTTP 400 when missing); a version not in `MODERN_PROTOCOL_VERSIONS` — including

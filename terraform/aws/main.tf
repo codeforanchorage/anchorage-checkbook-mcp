@@ -27,6 +27,9 @@ locals {
 
   lambda_memory  = local.config.aws.lambda_memory != null ? local.config.aws.lambda_memory : var.lambda_memory
   lambda_timeout = local.config.aws.lambda_timeout != null ? local.config.aws.lambda_timeout : var.lambda_timeout
+
+  # The plugin's whole-call time budget (seconds). Feeds the duration alarm.
+  plugin_timeout = try(local.config.plugins.anchorage_checkbook.timeout, local.lambda_timeout * 0.7)
 }
 
 # IAM role for Lambda

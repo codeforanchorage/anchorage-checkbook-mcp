@@ -7,7 +7,7 @@ variable "lambda_name" {
 variable "aws_region" {
   description = "AWS region for deployment"
   type        = string
-  default     = "us-east-1"
+  default     = "us-west-2"
 }
 
 variable "config_file" {
@@ -23,9 +23,9 @@ variable "lambda_memory" {
 }
 
 variable "lambda_timeout" {
-  description = "Lambda timeout in seconds"
+  description = "Lambda timeout in seconds. Must stay under the 29s API Gateway integration timeout. config.yaml aws.lambda_timeout takes precedence."
   type        = number
-  default     = 120
+  default     = 28
 }
 
 variable "lambda_reserved_concurrency" {
@@ -35,7 +35,7 @@ variable "lambda_reserved_concurrency" {
 }
 
 variable "api_quota_limit" {
-  description = "API Gateway daily request quota"
+  description = "Daily request quota on the usage plan. Usage plans only meter requests that carry an API key, so this does not limit the public /mcp route."
   type        = number
   default     = 1000
 }

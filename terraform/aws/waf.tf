@@ -6,7 +6,10 @@
 # this is the primary line of defense against abuse (denial-of-wallet,
 # scrapers, known exploit payloads).
 #
-# Set `waf_rate_limit_per_5min = 0` to skip creating the WAF entirely.
+# With `use_shared_waf = true` (both environments here) no ACL is created in
+# this repo: the stage is associated with the fleet ACL from mcp-stats, and
+# `waf_rate_limit_per_5min` is not read. Only with `use_shared_waf = false`
+# does `waf_rate_limit_per_5min = 0` skip the WAF.
 ###############################################################################
 
 locals {

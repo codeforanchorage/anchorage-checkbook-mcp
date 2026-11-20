@@ -56,17 +56,18 @@ resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
 
 resource "aws_cloudwatch_metric_alarm" "lambda_duration_near_timeout" {
   alarm_name         = "${local.lambda_name}-lambda-duration-near-timeout"
-  alarm_description  = "Lambda p95 duration is approaching the configured timeout"
+  alarm_description  = "Lambda p95 duration is approaching the upstream time budget"
   namespace          = "AWS/Lambda"
   metric_name        = "Duration"
   extended_statistic = "p95"
   period             = 300
   evaluation_periods = 2
-  # 80% of the Lambda timeout. Now that the timeout is aligned just under API
-  # Gateway's 29s ceiling this fires at ~22.4s -- i.e. BEFORE the gateway
-  # starts returning 504s. While the timeout was 60s the threshold sat at 48s,
-  # which could only trip long after users were already seeing failures.
-  threshold           = local.lambda_timeout * 1000 * 0.8
+  # 90% of the plugin's time budget (18s of 20s). A tool call is cut off at
+  # that budget and returns a readable error, so durations stop at about 20s:
+  # a threshold tied to the Lambda timeout (22.4s) sat in a range a slow
+  # upstream never reaches, and could only fire once calls were being killed.
+  # This one fires when most calls are running into the budget.
+  threshold           = local.plugin_timeout * 1000 * 0.9
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
 

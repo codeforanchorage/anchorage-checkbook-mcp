@@ -229,7 +229,10 @@ resource "aws_api_gateway_method_settings" "mcp_post" {
   }
 }
 
-# Usage Plan
+# Usage Plan. A usage plan meters only requests that carry an API key, and
+# the public /mcp route takes none, so the quota and throttle here apply
+# only to the keyed /mcp-gcc route (off unless var.enable_gcc_route). The
+# public route is limited by the stage method settings above and the WAF.
 resource "aws_api_gateway_usage_plan" "mcp_usage_plan" {
   name = "${local.lambda_name}-usage-plan"
 

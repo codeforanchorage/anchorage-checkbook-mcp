@@ -26,7 +26,9 @@ type JSONRPCRequest struct {
 type JSONRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-	Data    string `json:"data,omitempty"`
+	// The server sends structured data on some errors (the list of
+	// supported protocol versions, for one), not only strings.
+	Data interface{} `json:"data,omitempty"`
 }
 
 // JSONRPCResponse represents a JSON-RPC 2.0 response
@@ -128,6 +130,17 @@ func (c *Client) HandleRequest(req *JSONRPCRequest) *JSONRPCResponse {
 		if req.ID == nil {
 			return nil
 		}
+		// The server answers protocol errors (an unsupported version, a
+		// refused Origin) with a JSON-RPC error body on a 4xx. Pass that
+		// through so the client sees the reason, not just the status.
+		if errBody, readErr := io.ReadAll(resp.Body); readErr == nil {
+			var errResp JSONRPCResponse
+			if json.Unmarshal(errBody, &errResp) == nil && errResp.Error != nil {
+				errResp.JSONRPC = "2.0"
+				errResp.ID = req.ID
+				return &errResp
+			}
+		}
 		return &JSONRPCResponse{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -197,8 +210,9 @@ func (c *Client) HandleRequest(req *JSONRPCRequest) *JSONRPCResponse {
 func (c *Client) Run() error {
 	scanner := bufio.NewScanner(os.Stdin)
 
-	// Set a large buffer size for long lines if needed, but default is usually fine (64k)
-	// We'll stick to default for now as it matches Python's line reading
+	// A Scanner stops with ErrTooLong at 64 KB by default, which would end
+	// the bridge on one long request line. Allow lines up to 16 MB.
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())

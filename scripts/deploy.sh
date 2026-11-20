@@ -152,7 +152,10 @@ fi
 
 echo -e "${YELLOW}📋 Step 1: Validating configuration...${NC}"
 
-# Count enabled plugins using Python for reliable YAML parsing
+# Count enabled plugins using Python for reliable YAML parsing. The exit
+# code is captured with `||`: under `set -e` a bare failing assignment ends
+# the script before the explanations below can print.
+EXIT_CODE=0
 ENABLED_COUNT=$($PYTHON << 'EOF'
 import yaml
 import sys
@@ -187,9 +190,7 @@ except Exception as e:
     print(f"Error parsing config.yaml: {e}", file=sys.stderr)
     sys.exit(3)
 EOF
-)
-
-EXIT_CODE=$?
+) || EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 1 ]; then
     echo -e "${RED}❌ Configuration Error: No Plugins Enabled${NC}"
@@ -293,6 +294,9 @@ mkdir -p "$PACKAGE_DIR"
 # install step below places next to plugins/ in the package root.
 cp -r plugins "$PACKAGE_DIR/"
 cp -r custom_plugins "$PACKAGE_DIR/" 2>/dev/null || mkdir -p "$PACKAGE_DIR/custom_plugins"
+# Local bytecode caches (one per Python version that ever ran the tests)
+# are not part of the build.
+find "$PACKAGE_DIR/plugins" "$PACKAGE_DIR/custom_plugins" -type d -name "__pycache__" -prune -exec rm -rf {} +
 cp requirements.txt "$PACKAGE_DIR/" 2>/dev/null || true
 # Ship config.yaml INSIDE the package. The Lambda reads it at runtime
 # (server/http_handler.py::_packaged_config_path) instead of via the
@@ -388,8 +392,10 @@ printf '{"commit": "%s", "dirty": %s, "locked": %s}\n' \
     "$GIT_COMMIT" "$BUILD_DIRTY" "$BUILD_LOCKED" > "$PACKAGE_DIR/BUILD_INFO.json"
 echo "Build: commit ${GIT_COMMIT:0:7} dirty=${BUILD_DIRTY} locked=${BUILD_LOCKED}"
 
-# Create zip file
+# Create zip file. Remove the previous archive first: `zip -r` UPDATES an
+# existing one, so files deleted since the last build would stay in it.
 ZIP_FILE="lambda-deployment.zip"
+rm -f "$ZIP_FILE"
 cd "$PACKAGE_DIR"
 if command -v zip &> /dev/null; then
     zip -r "../$ZIP_FILE" . > /dev/null

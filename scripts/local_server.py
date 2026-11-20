@@ -9,6 +9,13 @@ import sys
 import uuid
 from pathlib import Path
 
+# The banner below prints emoji. On Windows a redirected stdout uses the
+# locale encoding (cp1252), which cannot encode them, and the server died
+# at its first print. Write UTF-8 whatever the console is.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 # Add project root to Python path so we can import from core
 project_root = Path(__file__).parent.parent.resolve()
 if str(project_root) not in sys.path:
@@ -24,10 +31,14 @@ from server.http_handler import UniversalHTTPHandler
 
 logger = logging.getLogger(__name__)
 
-# Load config (OPENCONTEXT_CONFIG env var for tests; default config.yaml)
-_config_path = os.environ.get("OPENCONTEXT_CONFIG", "config.yaml")
-with open(_config_path) as f:
-    config = yaml.safe_load(f)
+# Load config. OPENCONTEXT_CONFIG may hold a path or the config itself as
+# JSON -- the handler accepts both, so this does too. Default: config.yaml.
+_config_source = os.environ.get("OPENCONTEXT_CONFIG", "config.yaml")
+if _config_source.lstrip().startswith("{"):
+    config = json.loads(_config_source)
+else:
+    with open(_config_source) as f:
+        config = yaml.safe_load(f)
 
 # Configure JSON logging - use pretty format for local development
 logging_config = get_logging_config(config)
@@ -134,6 +145,10 @@ async def start_server():
     # enforced at API Gateway, so locally it behaves like /mcp.
     app.router.add_post("/mcp-gcc", handle_mcp_request)
     app.router.add_options("/mcp-gcc", handle_mcp_options)
+    # Everything else (GET, DELETE, an unknown path) goes to the handler as
+    # well, so its own 405/404 bodies and its Origin check answer here as
+    # they do in prod, rather than aiohttp's defaults.
+    app.router.add_route("*", "/{tail:.*}", handle_mcp_request)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -190,14 +205,20 @@ async def start_server():
     print("\nPress Ctrl+C to stop")
     print("=" * 50 + "\n")
 
-    # Keep running
+    # Keep running. Ctrl+C reaches this coroutine as a cancellation (that
+    # is how asyncio.run stops it), never as KeyboardInterrupt, so the
+    # cleanup belongs in `finally`.
     try:
         await asyncio.Event().wait()
-    except KeyboardInterrupt:
+    finally:
         print("\n👋 Shutting down...")
         if http_handler._plugin_manager is not None:
             await http_handler._plugin_manager.shutdown()
+        await runner.cleanup()
 
 
 if __name__ == "__main__":
-    asyncio.run(start_server())
+    try:
+        asyncio.run(start_server())
+    except KeyboardInterrupt:
+        pass

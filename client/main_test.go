@@ -143,3 +143,27 @@ func TestHandleRequest_ConnectionError(t *testing.T) {
 		t.Errorf("Expected error message 'HTTP error', got '%s'", resp.Error.Message)
 	}
 }
+
+func TestHandleRequest_ErrorBodyPassedThrough(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2025-11-25"]}}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, 5*time.Second)
+	resp := client.HandleRequest(&JSONRPCRequest{JSONRPC: "2.0", ID: 7, Method: "tools/list"})
+
+	if resp == nil || resp.Error == nil {
+		t.Fatalf("expected an error response, got %+v", resp)
+	}
+	if resp.Error.Code != -32022 {
+		t.Errorf("expected the server's code -32022, got %d", resp.Error.Code)
+	}
+	if resp.ID != 7 {
+		t.Errorf("expected the request id 7, got %v", resp.ID)
+	}
+	if _, err := json.Marshal(resp); err != nil {
+		t.Errorf("response with structured error data must marshal: %v", err)
+	}
+}
