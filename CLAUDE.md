@@ -85,6 +85,16 @@ Two AWS sizing values are read from `config.yaml` in preference to `terraform/aw
 | Lambda (`lambda_timeout`) | 28s | self-terminates before the gateway gives up |
 | Plugin HTTP (`plugins.anchorage_checkbook.timeout`) | 20s | a hung upstream returns a readable tool error instead of the Lambda being killed mid-flight |
 
+## Deploying
+
+`./scripts/deploy.sh -e staging|prod` is the only supported path (`--yes` skips the confirmation prompt). Three rules it enforces, each of which changes how you work:
+
+- **The working tree must be a commit.** The script refuses to package uncommitted or untracked changes, so the live code always matches something in git. Commit first, then deploy. `--allow-dirty` overrides this and is for emergencies only.
+- **Dependencies come from `uv.lock`**, the versions CI tested, not from the lower bounds in `requirements.txt`. To move a dependency: `uv lock --upgrade`, run the tests, commit `uv.lock`, then deploy. The script finds `uv` on PATH or as `python -m uv`; without either it falls back to pip and `requirements.txt` with a warning, and the build is marked unlocked.
+- **Every package carries `BUILD_INFO.json`** (`commit`, `dirty`, `locked`) at its root. To see what an environment runs, read that file out of the deployed zip (`aws lambda get-function --query Code.Location`) instead of inferring it from timestamps or `serverInfo.version`.
+
+Deploy to staging first, run `python scripts/smoke_prod.py <staging-url>`, then prod and `python scripts/smoke_prod.py` (no argument targets prod). The Terraform workspaces are `anchorage-checkbook-staging` and `anchorage-checkbook-prod`, in the state bucket `anchorage-gis-opencontext-tfstate` that the other Anchorage MCP servers share. Never point this repo at another server's workspace, and never regenerate `terraform/aws/backend.tf`: a new backend would start from empty state and plan to create everything again.
+
 ## Structured output
 
 Six of the eight tools (`spending_stats`, `search_by_vendor`, `top_vendors`, `get_line_items`, `list_field_values`, `query_checkbook`) declare an MCP `outputSchema` and return `structuredContent` alongside the markdown. `list_tables` and `get_table_schema` deliberately do not — their value is the prose guidance, and a schema would commit them to a shape whose point is the narrative.

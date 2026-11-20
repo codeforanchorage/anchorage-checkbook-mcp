@@ -33,9 +33,9 @@ terraform apply
 
 **Note:** The deploy script copies `config.yaml` into `terraform/aws/` before running Terraform. For manual runs from `terraform/aws/`, use `-var="config_file=../../config.yaml"` if running from project root.
 
-### Alternative: Per-account backend
+### State backend
 
-Use [scripts/setup-backend.sh](../scripts/setup-backend.sh) to create a per-account S3 bucket and DynamoDB table, then generate `terraform/aws/backend.tf` with custom bucket name. Use this if you need a separate state bucket per AWS account.
+State lives in the S3 bucket named in [aws/backend.tf](aws/backend.tf), which the other Anchorage MCP servers share, under the workspaces `anchorage-checkbook-staging` and `anchorage-checkbook-prod`. Do not replace that file. A fork deploying to its own AWS account should create a bucket and lock table and write its own `backend.tf` before the first `terraform init`.
 
 ## Other Clouds
 
