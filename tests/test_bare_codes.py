@@ -15,6 +15,7 @@ copied from the service, and the maps are the real vendored ones.
 
 from unittest.mock import AsyncMock, Mock, patch
 
+import asyncio
 import pytest
 
 from plugins.anchorage_checkbook.config_schema import AnchorageCheckbookPluginConfig
@@ -250,16 +251,142 @@ class TestGrouping:
         for caveat in structured["caveats"]:
             assert caveat["message"] in text
 
-    async def test_incomplete_fetch_is_not_merged(self, plugin):
-        """A full server page means more groups exist; a partial merge
-        would under-report, so the rows are only relabelled."""
+    async def test_a_grouping_over_one_page_is_paged_then_merged(self, plugin):
+        """2,000+ raw groups used to skip the merge and say nothing: one
+        fund/account appeared twice, or lost its FY2026 half below the
+        cut. The halves here are on DIFFERENT pages."""
+        size = plugin.SERVER_PAGE_SIZE
+        filler = [
+            {"Fund": f"{600000 + i} : F{i}", "sum_Amount": 50.0, "row_count": 1}
+            for i in range(size - 1)
+        ]
+        page0 = [
+            {"Fund": "101000 : Areawide General", "sum_Amount": 60.0, "row_count": 2}
+        ] + filler
+        page1 = [{"Fund": "101000", "sum_Amount": 45.0, "row_count": 1}]
+        by_offset = {None: page0, str(size): page1}
+
+        async def serve(*_a, extra_params=None, **_k):
+            return by_offset.get(extra_params.get("resultOffset"), [])
+
+        with patch.object(
+            plugin, "_query_statistics", AsyncMock(side_effect=serve)
+        ) as query:
+            text, structured = await plugin._spending_stats(
+                {"table": 0, "group_by": ["Fund"], "limit": 2}
+            )
+        assert structured["rows"][0] == {
+            "group": {"Fund": "101000 : Areawide General"},
+            "value": 105.0,
+            "row_count": 3,
+        }
+        assert "fy2026_bare_codes_unmerged" not in gaps(structured)
+        assert structured["summary"]["truncated"] is True
+        offsets = [
+            c.kwargs["extra_params"].get("resultOffset") for c in query.await_args_list
+        ]
+        assert offsets[:2] == [None, str(size)]
+        # Ties are broken by the group fields so pages cannot overlap.
+        assert query.await_args.kwargs["order_by"] == "sum_Amount DESC,Fund"
+
+    async def test_too_many_groups_is_unmerged_and_says_so(self, plugin):
         rows = [
             {"Fund": "101000", "sum_Amount": 1.0, "row_count": 1}
             for _ in range(plugin.SERVER_PAGE_SIZE)
         ]
-        _, structured, _ = await self._stats(plugin, rows, group_by=["Fund"], limit=3)
+        text, structured, query = await self._stats(
+            plugin, rows, group_by=["Fund"], limit=3
+        )
+        # Page 0, one wave, and the one-row look past the cap that says
+        # the rest is not worth fetching.
+        assert query.await_count == 1 + plugin.STATS_PAGE_WAVE + 1
         assert len(structured["rows"]) == 3
         assert structured["summary"]["truncated"] is True
+        assert "fy2026_bare_codes_unmerged" in gaps(structured)
+        assert "GROUPS NOT MERGED" in text
+        for caveat in structured["caveats"]:
+            assert caveat["message"] in text
+
+    async def test_too_many_groups_in_one_year_needs_no_warning(self, plugin):
+        """One fiscal year holds one storage form: nothing to merge."""
+        rows = [
+            {"Fund": "101000", "sum_Amount": 1.0, "row_count": 1}
+            for _ in range(plugin.SERVER_PAGE_SIZE)
+        ]
+        _, structured, _ = await self._stats(
+            plugin, rows, group_by=["Fund"], limit=3, fiscal_year=2026
+        )
+        assert "fy2026_bare_codes_unmerged" not in gaps(structured)
+
+    async def test_a_failed_later_page_falls_back_to_the_first(self, plugin):
+        size = plugin.SERVER_PAGE_SIZE
+        page0 = [
+            {"Fund": f"{600000 + i} : F{i}", "sum_Amount": 50.0, "row_count": 1}
+            for i in range(size)
+        ]
+
+        async def query(*_a, extra_params=None, **_k):
+            if extra_params.get("resultOffset"):
+                raise RuntimeError("boom")
+            return page0
+
+        with patch.object(plugin, "_query_statistics", new=query):
+            _, structured = await plugin._spending_stats(
+                {"table": 0, "group_by": ["Fund"], "limit": 5}
+            )
+        assert len(structured["rows"]) == 5
+        assert "fy2026_bare_codes_unmerged" in gaps(structured)
+
+    async def test_slow_later_pages_give_up_within_the_merge_budget(self, plugin):
+        plugin.STATS_MERGE_BUDGET_S = 0.05
+        size = plugin.SERVER_PAGE_SIZE
+        page0 = [
+            {"Fund": f"{600000 + i} : F{i}", "sum_Amount": 50.0, "row_count": 1}
+            for i in range(size)
+        ]
+        cancelled = []
+
+        async def query(*_a, extra_params=None, **_k):
+            if extra_params.get("resultOffset"):
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    cancelled.append(extra_params["resultOffset"])
+                    raise
+            return page0
+
+        with patch.object(plugin, "_query_statistics", new=query):
+            _, structured = await plugin._spending_stats(
+                {"table": 0, "group_by": ["Fund"], "limit": 5}
+            )
+        assert len(structured["rows"]) == 5
+        assert "fy2026_bare_codes_unmerged" in gaps(structured)
+        # No request is left running behind the response.
+        assert len(cancelled) == plugin.STATS_PAGE_WAVE + 1
+
+    async def test_unmerged_rows_keep_the_order_asked_for(self, plugin):
+        """Pages are fetched in value order; a grouping too big to merge
+        that was asked for in group order is re-read in that order."""
+        rows = [
+            {"Fund": "101000", "sum_Amount": 1.0, "row_count": 1}
+            for _ in range(plugin.SERVER_PAGE_SIZE)
+        ]
+        _, _, query = await self._stats(
+            plugin, rows, group_by=["Fund"], limit=3, order="group"
+        )
+        last = query.await_args.kwargs
+        assert last["order_by"] == "Fund"
+        assert last["extra_params"] == {"resultRecordCount": "3"}
+
+    async def test_an_unmergeable_statistic_is_not_paged(self, plugin):
+        rows = [
+            {"Fund": "101000", "percentile_cont_Amount": 1.0, "row_count": 1}
+            for _ in range(plugin.SERVER_PAGE_SIZE)
+        ]
+        _, _, query = await self._stats(
+            plugin, rows, group_by=["Fund"], stat_type="percentile_cont"
+        )
+        assert query.await_count == 1
 
     async def test_ungrouped_or_uncoded_groupings_are_untouched(self, plugin):
         rows = [{"Fiscal_Year": "2026", "sum_Amount": 5.0, "row_count": 1}]

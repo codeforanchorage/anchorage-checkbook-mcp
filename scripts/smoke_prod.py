@@ -314,7 +314,8 @@ try:
     # tool count, which changes whenever a tool is added.
     check(
         "every tool is prefixed and titled",
-        names and all(t["name"].startswith("anchorage_checkbook__") for t in tools)
+        names
+        and all(t["name"].startswith("anchorage_checkbook__") for t in tools)
         and all(t.get("title") for t in tools),
         f"{len(tools)} tools",
     )
@@ -323,9 +324,7 @@ try:
         all("idempotentHint" not in (t.get("annotations") or {}) for t in tools),
         "meaningful only when readOnlyHint is false",
     )
-    declared = {
-        t["name"].split("__", 1)[1] for t in tools if "outputSchema" in t
-    }
+    declared = {t["name"].split("__", 1)[1] for t in tools if "outputSchema" in t}
     check(
         "the six data tools declare an outputSchema",
         declared == SCHEMA_TOOLS,
@@ -432,6 +431,29 @@ try:
     validate_structured("spending_stats grouped", "spending_stats", sc)
 except Exception as e:
     check("spending_stats grouped", False, repr(e))
+
+try:
+    # Fund x G_L_Account is ~6,400 raw groups, more than one 2,000-group
+    # server page. Until the grouping was paged, the merge of the FY2026
+    # bare codes with earlier years' 'code : label' was skipped here and
+    # the same fund/account came back as two rows.
+    r = call_tool(
+        "spending_stats",
+        {"table": 0, "group_by": ["Fund", "G_L_Account"], "limit": 200},
+    )
+    sc = structured_of(r)
+    keys = [(row["group"]["Fund"], row["group"]["G_L_Account"]) for row in sc["rows"]]
+    gap_codes = [c.get("gap") for c in sc["caveats"]]
+    check(
+        "a grouping over one server page has each group once",
+        len(keys) == 200
+        and len(set(keys)) == len(keys)
+        and "fy2026_bare_codes_unmerged" not in gap_codes,
+        f"{len(keys)} rows, {len(set(keys))} distinct",
+    )
+    validate_structured("spending_stats paged grouping", "spending_stats", sc)
+except Exception as e:
+    check("spending_stats paged grouping", False, repr(e))
 
 try:
     # A known vendor returns >= 1 spelling. Which spellings, and how much

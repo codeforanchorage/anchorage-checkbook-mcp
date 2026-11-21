@@ -586,6 +586,21 @@ class AnchorageCheckbookPlugin(MCPPlugin):
     MAX_ROWS = 500
     # Hard cap on groups in one spending_stats response.
     MAX_GROUPS = 200
+    # A grouping on a coded field is fetched WHOLE before it is merged and
+    # ranked, paging the aggregated result (the service supports it). This
+    # caps that at 16,000 raw groups. Measured 2026-11-20 on table 0: Fund
+    # x G_L_Account is 6,421 groups, Fund x G_L_Account x Business_Area
+    # 8,478, Fund x Vendor_Name 67,003. Past the cap the grouping is
+    # returned unmerged with a caveat saying so.
+    STATS_MERGE_MAX_PAGES = 8
+    # Pages after the first are requested this many at a time. Each page
+    # makes the service aggregate the whole table again (~2.5s), so more
+    # at once mostly slows each of them down.
+    STATS_PAGE_WAVE = 4
+    # Time allowed for the pages after the first. Past it the grouping is
+    # returned unmerged, which leaves room in the 20s call budget for the
+    # answer instead of spending all of it on a merge that may not finish.
+    STATS_MERGE_BUDGET_S = 11.0
     # get_table_schema reports distinct-value counts up to this many,
     # then '>N' (Vendor_Name has tens of thousands of spellings).
     CARDINALITY_CAP = 1000
@@ -1755,6 +1770,88 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         data = await self._request_json(f"{self._table_url(table_id)}/query", params)
         return [f.get("attributes") or {} for f in data.get("features") or []]
 
+    async def _query_all_groups(
+        self,
+        table_id: int,
+        where: str,
+        out_statistics: List[Dict[str, Any]],
+        group_by: str,
+        order_by: str,
+    ) -> Tuple[List[Dict[str, Any]], bool]:
+        """Every group of a grouped statistics query, paged.
+
+        Returns (rows, complete). complete is False when the grouping has
+        more than STATS_MERGE_MAX_PAGES pages, when the later pages did
+        not arrive within STATS_MERGE_BUDGET_S, or when one of them
+        failed; rows is then the FIRST page only, in server order, which
+        is a correct top-of-ranking but not the whole grouping.
+        order_by must be a total order, or pages can overlap.
+        """
+        size = self.SERVER_PAGE_SIZE
+        cap = self.STATS_MERGE_MAX_PAGES
+
+        async def page(index: int, count: int = size) -> List[Dict[str, Any]]:
+            extra = {"resultRecordCount": str(count)}
+            if index:
+                extra["resultOffset"] = str(index * size)
+            return await self._query_statistics(
+                table_id,
+                where,
+                out_statistics,
+                group_by=group_by,
+                order_by=order_by,
+                extra_params=extra,
+            )
+
+        first = await page(0)
+        if len(first) < size:
+            return first, True
+
+        async def rest() -> Optional[List[Dict[str, Any]]]:
+            rows = list(first)
+            index = 1
+            while index < cap:
+                wave = range(index, min(index + self.STATS_PAGE_WAVE, cap))
+                calls = [page(i) for i in wave]
+                if index == 1 and wave.stop < cap:
+                    # One row from just past the cap, asked for alongside
+                    # the first wave: if it exists the grouping cannot be
+                    # fetched whole, and the remaining waves are not sent.
+                    calls.append(page(cap, 1))
+                pages = await asyncio.gather(*calls)
+                if len(pages) > len(wave) and pages.pop():
+                    return None
+                for chunk in pages:
+                    rows.extend(chunk)
+                    if len(chunk) < size:
+                        return rows
+                index = wave.stop
+            return None
+
+        try:
+            # wait_for cancels the requests still in flight on timeout,
+            # and gather cancels the rest of a wave when one fails, so
+            # nothing is left running after this returns.
+            rows = await asyncio.wait_for(rest(), timeout=self.STATS_MERGE_BUDGET_S)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"grouped statistics for table {table_id} "
+                f"group_by={group_by!r} not fetched whole within "
+                f"{self.STATS_MERGE_BUDGET_S}s; returning unmerged"
+            )
+            return first, False
+        except Exception as e:
+            # The first page is a usable answer; losing a later one costs
+            # the merge, not the call.
+            logger.warning(
+                f"grouped statistics page fetch failed for table "
+                f"{table_id} group_by={group_by!r}: {e}"
+            )
+            return first, False
+        if rows is None:
+            return first, False
+        return rows, True
+
     async def _fetch_distinct_values(
         self,
         table_id: int,
@@ -2403,11 +2500,13 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         # A grouping on a coded field returns one fund or department TWICE
         # across the FY2026 boundary (once per storage form). So fetch
         # every group, merge the pairs, and only then rank and cut to the
-        # limit -- cutting first would rank each half separately. If the
-        # server cannot return every group in one page the merge would be
-        # partial, so it is skipped and the limit applied as-is.
+        # limit -- cutting first would rank each half separately. The
+        # grouping is paged to get all of it. If it is too large for that
+        # a merge would be partial, so it is skipped, the limit applied
+        # as-is, and the response says the groups are unmerged.
         coded_groups = [g for g in groups if g in CODED_FIELDS]
         bare_seen = False
+        unmerged_too_many = False
         more_groups: Optional[bool] = None
         if coded_groups:
             fetch_stats = list(out_statistics)
@@ -2424,15 +2523,50 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                         "outStatisticFieldName": "merge_n",
                     },
                 ]
-            raw_rows = await self._query_statistics(
-                info.id,
-                where,
-                fetch_stats,
-                group_by=",".join(groups),
-                order_by=order_by,
-                extra_params={"resultRecordCount": str(self.SERVER_PAGE_SIZE)},
+            group_by = ",".join(groups)
+            if stat_type in self.MERGEABLE_STATS:
+                # Paged in value order whatever order was asked for: the
+                # rows are re-sorted after the merge anyway, and the
+                # service pages a value ranking in about half the time of
+                # a ranking by group text. Ties are broken by the group
+                # fields, or two pages could each hold (or each miss) the
+                # same group.
+                raw_rows, complete = await self._query_all_groups(
+                    info.id,
+                    where,
+                    fetch_stats,
+                    group_by,
+                    f"{out_name} DESC,{group_by}",
+                )
+                if not complete and order == "group":
+                    # Unmerged, the rows shown are the server's own first
+                    # `limit`, and those must be in the order asked for.
+                    raw_rows = await self._query_statistics(
+                        info.id,
+                        where,
+                        fetch_stats,
+                        group_by=group_by,
+                        order_by=order_by,
+                        extra_params={"resultRecordCount": str(limit)},
+                    )
+            else:
+                # Nothing to merge, so nothing to page for.
+                raw_rows = await self._query_statistics(
+                    info.id,
+                    where,
+                    fetch_stats,
+                    group_by=group_by,
+                    order_by=order_by,
+                    extra_params={"resultRecordCount": str(self.SERVER_PAGE_SIZE)},
+                )
+                complete = len(raw_rows) < self.SERVER_PAGE_SIZE
+            # Both storage forms can only be present when the query spans
+            # more than one fiscal year.
+            unmerged_too_many = (
+                not complete
+                and stat_type in self.MERGEABLE_STATS
+                and (years is None or len(years) > 1)
             )
-            complete = len(raw_rows) < self.SERVER_PAGE_SIZE
             rows, bare_seen = self._merge_coded_groups(
                 raw_rows if complete else raw_rows[:limit],
                 groups,
@@ -2483,6 +2617,26 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 self._caveat(
                     CAVEAT_TABLE_EMPTY,
                     f"Table {info.id} is EMPTY upstream (0 rows).",
+                )
+            )
+        if unmerged_too_many:
+            cap = self.STATS_MERGE_MAX_PAGES * self.SERVER_PAGE_SIZE
+            caveats.append(
+                self._caveat(
+                    CAVEAT_KNOWN_GAP,
+                    f"**GROUPS NOT MERGED:** this grouping has more than "
+                    f"{cap:,} groups, too many to fetch and combine, so "
+                    f"the two storage forms of a fund, account or "
+                    f"department code were NOT merged. A group below can "
+                    f"appear TWICE (once for its FY2026 rows, once for "
+                    f"earlier years), and a group shown once can be "
+                    f"MISSING its FY2026 amount or its earlier-years "
+                    f"amount when that half ranked below the cut. Do not "
+                    f"report these figures as multi-year totals. Pin "
+                    f"fiscal_year to a single year, or add a filter "
+                    f"(fund, business_area, gl_account, vendor) so the "
+                    f"grouping is small enough to merge.",
+                    gap="fy2026_bare_codes_unmerged",
                 )
             )
         if bare_seen:

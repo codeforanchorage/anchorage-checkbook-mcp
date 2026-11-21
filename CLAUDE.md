@@ -127,6 +127,10 @@ Three things depend on it, each pinned in `tests/test_bare_codes.py`:
 - **Groupings** (`_merge_coded_groups`): `spending_stats` fetches every group, merges
   the two storage forms of one code, then ranks and applies the limit. `stddev`,
   `var` and `percentile_cont` cannot be recombined and are left unmerged, with a caveat.
+  "Every group" means paging the aggregated query (`_query_all_groups`): one page
+  is 2,000 groups and Fund x G_L_Account alone is 6,421. Past
+  `STATS_MERGE_MAX_PAGES` (16,000 groups, e.g. Fund x Vendor_Name) the grouping
+  is returned unmerged with the same `fy2026_bare_codes_unmerged` caveat.
 - **Rows and value lists** show the canonical form (`code : label`, or the department
   name). An unknown code is shown as the code, never guessed.
 
