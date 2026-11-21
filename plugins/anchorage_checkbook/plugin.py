@@ -514,12 +514,16 @@ TABLES: Dict[int, TableInfo] = {
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-# The Lambda adapter builds a NEW plugin object for every request and shuts
-# it down afterwards (an httpx client cannot outlive the event loop of the
-# invocation that made it). Anything kept on the instance therefore lives
-# for one request, so the table metadata and the snapshot date -- plain
-# data, safe to share -- are kept here instead, keyed by service URL. A warm
-# container then pays for them once, not on every ping.
+# Table metadata and the snapshot date, keyed by service URL, with a
+# lifetime. How long a plugin OBJECT lives depends on the core: before
+# opencontext-core 1.5.0 the Lambda adapter built a new one for every
+# request, and since 1.5.0 it keeps one for the life of a warm container
+# (hours, under steady traffic). Neither is the right lifetime for this
+# data -- one request is too short to be worth fetching it, and a whole
+# container is too long, because the upstream is republished and a kept
+# object would go on reporting the old snapshot date beside new rows. So
+# the data lives here, expires after SHARED_STATE_TTL_S, and every tool
+# call re-binds to the current state (`_sync_shared_state`).
 SHARED_STATE_TTL_S = 900.0
 # A failed startup fetch is held off this long before it is tried again, so
 # an upstream outage costs one slow request per window, not every request.
@@ -628,6 +632,8 @@ class AnchorageCheckbookPlugin(MCPPlugin):
         # so a hung upstream yields a readable error before the Lambda
         # is killed. None outside a call.
         self._request_deadline: Optional[float] = None
+        # The shared state this object is bound to; None until initialize().
+        self._state: Optional[_ServiceState] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -643,19 +649,43 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             )
             return False
 
+        await self._sync_shared_state(force=True)
+
+        self._initialized = True
+        logger.info(
+            f"Anchorage Checkbook plugin initialized for {self.plugin_config.city_name}"
+        )
+        return True
+
+    async def _sync_shared_state(self, force: bool = False) -> None:
+        """Bind this object to the current shared state, loading the table
+        metadata if that state has none.
+
+        Called from initialize() and at the start of every tool call. The
+        second is what makes the lifetime real: initialize() runs once per
+        warm container, so a state that expired (or a metadata fetch that
+        failed at startup and is due another try) would otherwise never be
+        noticed by an object that outlives it.
+        """
+        if self.plugin_config is None or (self._state is None and not force):
+            # Never initialized (a unit test driving a handler directly):
+            # leave whatever the caller put on the instance alone.
+            return
         state = _shared_state(str(self.plugin_config.service_url))
-        self._live_fields = state.live_fields
-        self._date_fields = state.date_fields
-        self._pubdate_cache = state.pubdate_cache
-        self._pubdate_retry_at = state.pubdate_retry_at
+        if state is not self._state:
+            self._state = state
+            self._live_fields = state.live_fields
+            self._date_fields = state.date_fields
+            self._pubdate_cache = state.pubdate_cache
+            self._pubdate_retry_at = state.pubdate_retry_at
 
         # Reachability + schema-drift check across all six tables, once
-        # per warm container rather than once per request. Failures are
-        # logged loudly but do NOT block startup: a transient blip at
-        # cold start must not take the whole server down (degraded >
-        # down). The fetch has its own short budget, and a failure is
-        # held off before the next try, so a hung upstream cannot make
-        # ping and tools/list as slow as the upstream is.
+        # per state lifetime rather than once per request. Failures are
+        # logged loudly but do NOT block anything: a transient blip must
+        # not take the whole server down (degraded > down). The fetch has
+        # its own short budget, and a failure is held off before the next
+        # try, so a hung upstream cannot make every request as slow as
+        # the upstream is.
         if not state.meta_loaded and time.monotonic() >= state.meta_retry_at:
             self._request_deadline = time.monotonic() + STARTUP_META_BUDGET_S
             try:
@@ -672,18 +702,13 @@ class AnchorageCheckbookPlugin(MCPPlugin):
             except Exception as e:
                 state.meta_retry_at = time.monotonic() + META_RETRY_AFTER_S
                 logger.warning(
-                    "anchorage_checkbook: service unreachable at startup; "
-                    "starting anyway (queries will retry per call)",
+                    "anchorage_checkbook: table metadata could not be "
+                    "loaded; continuing without it (field checks fall "
+                    "back to the registry, and it is retried shortly)",
                     extra={"error": str(e)},
                 )
             finally:
                 self._request_deadline = None
-
-        self._initialized = True
-        logger.info(
-            f"Anchorage Checkbook plugin initialized for {self.plugin_config.city_name}"
-        )
-        return True
 
     def _http(self) -> httpx.AsyncClient:
         """The HTTP client, created on first use.
@@ -4270,6 +4295,11 @@ class AnchorageCheckbookPlugin(MCPPlugin):
                 success=False,
                 error_message=f"Unknown tool: {tool_name}",
             )
+        # Pick up a shared state that expired, or a metadata fetch that is
+        # due another try, since this object was last used. It has its own
+        # short budget, which with the call's budget below still ends
+        # before the Lambda timeout.
+        await self._sync_shared_state()
         # The whole tool call shares one time budget, however many
         # upstream requests it makes, so it always answers before the
         # Lambda timeout.

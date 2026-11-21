@@ -165,3 +165,85 @@ class TestMetadataIsFetchedOncePerWarmContainer:
         state.meta_loaded = True
         state.created -= module.SHARED_STATE_TTL_S + 1
         assert module._shared_state("u").meta_loaded is False
+
+
+class TestAKeptPluginObjectStillRefreshes:
+    """Since opencontext-core 1.5.0 one plugin object serves a warm
+    container for hours, and initialize() runs once. The shared state's
+    lifetime has to be honoured by the object that outlives it."""
+
+    def _ok_client(self, fields):
+        resp = Mock(status_code=200)
+        resp.json = Mock(return_value={"fields": [{"name": f} for f in fields]})
+        return _client(AsyncMock(return_value=resp))
+
+    @pytest.mark.asyncio
+    async def test_an_expired_state_is_replaced_on_the_next_tool_call(self):
+        client = self._ok_client(["Amount"])
+        with patch("httpx.AsyncClient", return_value=client):
+            p = AnchorageCheckbookPlugin(CFG)
+            assert await p.initialize()
+        p._pubdate_cache[0] = "2026-10-16"
+        loads = client.get.call_count
+
+        async def handler(args):
+            return "ok"
+
+        # Still fresh: the same state, and no new upstream call.
+        with patch.object(p, "_list_tables", handler):
+            await p.execute_tool("list_tables", {})
+        assert p._pubdate_cache == {0: "2026-10-16"}
+        assert client.get.call_count == loads
+
+        # Expired: the snapshot date is forgotten and metadata reloaded,
+        # without initialize() running again.
+        module._SHARED_STATE[CFG["service_url"]].created -= (
+            module.SHARED_STATE_TTL_S + 1
+        )
+        with patch.object(p, "_list_tables", handler):
+            await p.execute_tool("list_tables", {})
+        assert p._pubdate_cache == {}
+        assert client.get.call_count == loads + len(TABLES)
+        assert p._live_fields[0] == {"Amount"}
+        assert p._request_deadline is None
+
+    @pytest.mark.asyncio
+    async def test_a_failed_startup_fetch_is_retried_by_a_later_tool_call(self):
+        get = AsyncMock(side_effect=httpx.ConnectError("down"))
+        with (
+            patch("httpx.AsyncClient", return_value=_client(get)),
+            patch.object(module.asyncio, "sleep", AsyncMock()),
+        ):
+            p = AnchorageCheckbookPlugin(CFG)
+            assert await p.initialize()
+            assert p._live_fields == {}
+
+            async def handler(args):
+                return "ok"
+
+            # Inside the hold-off: no retry.
+            failed = get.call_count
+            with patch.object(p, "_list_tables", handler):
+                await p.execute_tool("list_tables", {})
+            assert get.call_count == failed
+
+            # Hold-off over and the upstream is back.
+            resp = Mock(status_code=200)
+            resp.json = Mock(return_value={"fields": [{"name": "Amount"}]})
+            get.side_effect = None
+            get.return_value = resp
+            module._SHARED_STATE[CFG["service_url"]].meta_retry_at = 0.0
+            with patch.object(p, "_list_tables", handler):
+                await p.execute_tool("list_tables", {})
+        assert p._live_fields[0] == {"Amount"}
+
+    @pytest.mark.asyncio
+    async def test_an_uninitialized_plugin_is_left_alone(self, plugin):
+        plugin._pubdate_cache = {0: "2026-08-24"}
+
+        async def handler(args):
+            return "ok"
+
+        with patch.object(plugin, "_list_tables", handler):
+            await plugin.execute_tool("list_tables", {})
+        assert plugin._pubdate_cache == {0: "2026-08-24"}
