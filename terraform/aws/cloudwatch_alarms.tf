@@ -5,16 +5,19 @@
 # duration approaching the configured timeout. (The per-repo 4XX probing
 # alarm was retired; the fleet POST /mcp alarm in mcp-stats covers it.)
 #
-# If `alarm_sns_topic_arn` is set, alarms notify that topic. Otherwise the
-# alarms are created with no actions — you can still see them in the
-# CloudWatch console and wire notifications up later.
+# The alarms exist only when `alarm_sns_topic_arn` is set. An alarm with no
+# action notifies nobody and still costs $0.10 a month; the mcp-stats fleet
+# probe and POST /mcp 4xx alarms cover every server either way.
 ###############################################################################
 
 locals {
-  alarm_actions = var.alarm_sns_topic_arn != "" ? [var.alarm_sns_topic_arn] : []
+  alarm_actions  = var.alarm_sns_topic_arn != "" ? [var.alarm_sns_topic_arn] : []
+  alarms_enabled = var.alarm_sns_topic_arn != ""
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  count = local.alarms_enabled ? 1 : 0
+
   alarm_name          = "${local.lambda_name}-lambda-errors"
   alarm_description   = "Lambda function is returning errors"
   namespace           = "AWS/Lambda"
@@ -35,6 +38,8 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
+  count = local.alarms_enabled ? 1 : 0
+
   alarm_name          = "${local.lambda_name}-lambda-throttles"
   alarm_description   = "Lambda function is being throttled (concurrency limit hit)"
   namespace           = "AWS/Lambda"
@@ -55,6 +60,8 @@ resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "lambda_duration_near_timeout" {
+  count = local.alarms_enabled ? 1 : 0
+
   alarm_name         = "${local.lambda_name}-lambda-duration-near-timeout"
   alarm_description  = "Lambda p95 duration is approaching the upstream time budget"
   namespace          = "AWS/Lambda"
@@ -80,6 +87,8 @@ resource "aws_cloudwatch_metric_alarm" "lambda_duration_near_timeout" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "apigw_5xx" {
+  count = local.alarms_enabled ? 1 : 0
+
   alarm_name          = "${local.lambda_name}-apigw-5xx"
   alarm_description   = "API Gateway is returning 5XX responses"
   namespace           = "AWS/ApiGateway"
